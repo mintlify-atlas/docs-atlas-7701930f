@@ -1,0 +1,229 @@
+---
+title: "Task system"
+description: "How GTA:SA's task system drives ped AI — CTask, CTaskManager, simple vs complex tasks, and task sequences."
+---
+
+## Overview
+
+GTA San Andreas controls ped behaviour through a **task system**. Every action a ped can perform — walking, driving, fighting, chatting, fleeing — is encoded as a `CTask` subclass. Tasks are managed by a `CTaskManager` that is attached to each ped. At any moment a ped can be executing up to five *primary* tasks (ordered by priority) and up to six *secondary* tasks (parallel overlays such as attacking, ducking, or playing facial animations).
+
+This design makes AI behaviour composable and preemptible: a higher-priority event can abort a lower-priority task, and complex tasks decompose into sequences of simpler ones.
+
+## CTask — the base class
+
+```cpp
+class CTask {
+public:
+    virtual CTask*    Clone()          const = 0; // Deep copy
+    virtual CTask*    GetSubTask()     const = 0; // Child task (null for simple)
+    virtual bool      IsSimple()       const = 0;
+    virtual eTaskType GetTaskType()    const = 0;
+    virtual void      StopTimer(const CEvent*);
+    virtual bool      MakeAbortable(CPed*, eAbortPriority, const CEvent*) = 0;
+
+    bool IsComplex() const { return !IsSimple(); }
+
+protected:
+    CTaskComplex* m_Parent{}; // Always a complex task, or null
+};
+// Size: 0x8
+```
+
+The `eAbortPriority` enum controls how urgently a task can be interrupted:
+
+| Priority | Meaning |
+|---|---|
+| `ABORT_PRIORITY_LEISURE` | Abort only when convenient (end of current sub-task) |
+| `ABORT_PRIORITY_URGENT` | Abort as soon as possible |
+| `ABORT_PRIORITY_IMMEDIATE` | Abort right now, no cleanup |
+
+## CTaskSimple vs CTaskComplex
+
+<CardGroup cols={2}>
+  <Card title="CTaskSimple" icon="circle-dot">
+    A leaf task. It executes a single atomic behaviour each frame by returning `true` from its `ProcessPed` override when finished. It has no sub-tasks. Examples: `CTaskSimpleStandStill`, `CTaskSimpleAnim`, `CTaskSimpleUseGun`, `CTaskSimpleFight`.
+  </Card>
+  <Card title="CTaskComplex" icon="diagram-project">
+    A composite task. It drives behaviour by creating and managing a chain of sub-tasks via `CreateFirstSubTask`, `CreateNextSubTask`, and `ControlSubTask`. When a sub-task finishes, the complex task creates the next one. Examples: `CTaskComplexWander`, `CTaskComplexKillPedOnFoot`, `CTaskComplexEnterCar`.
+  </Card>
+</CardGroup>
+
+## CTaskManager
+
+Each `CPed` owns a `CTaskManager` that stores pointers to the currently active primary and secondary tasks.
+
+```cpp
+class CTaskManager {
+    std::array<CTask*, TASK_PRIMARY_MAX>   m_aPrimaryTasks{};   // 5 slots
+    std::array<CTask*, TASK_SECONDARY_MAX> m_aSecondaryTasks{}; // 6 slots
+    CPed*                                  m_pPed{};
+};
+// Size: 0x30
+```
+
+### Primary task slots
+
+Primary tasks are ordered from highest to lowest priority:
+
+| Index | Enum | Purpose |
+|---|---|---|
+| 0 | `TASK_PRIMARY_PHYSICAL_RESPONSE` | Immediate physical reactions (rag-doll, hit response) |
+| 1 | `TASK_PRIMARY_EVENT_RESPONSE_TEMP` | Short-lived event responses (react to gunshot) |
+| 2 | `TASK_PRIMARY_EVENT_RESPONSE_NONTEMP` | Persistent event responses (investigate, flee) |
+| 3 | `TASK_PRIMARY_PRIMARY` | Script-assigned or mission-critical task |
+| 4 | `TASK_PRIMARY_DEFAULT` | Default idle behaviour (wander, be a cop, etc.) |
+
+`GetActiveTask()` returns the first non-null slot — the one currently running. `ManageTasks()` is called each frame to tick the active task tree and handle transitions.
+
+### Secondary task slots
+
+Secondary tasks run in parallel with primary tasks without interrupting them:
+
+| Index | Enum | Purpose |
+|---|---|---|
+| 0 | `TASK_SECONDARY_ATTACK` | Weapon attack (controls ducking movement) |
+| 1 | `TASK_SECONDARY_DUCK` | Ducking behaviour |
+| 2 | `TASK_SECONDARY_SAY` | Voice line playback |
+| 3 | `TASK_SECONDARY_FACIAL_COMPLEX` | Facial animation task |
+| 4 | `TASK_SECONDARY_PARTIAL_ANIM` | Partial body animations (gestures, smoking) |
+| 5 | `TASK_SECONDARY_IK` | Inverse kinematics (arm pointing, look-at) |
+
+### Key operations
+
+```cpp
+// Assign a primary task
+taskMgr.SetTask(new CTaskComplexWander(), TASK_PRIMARY_DEFAULT);
+
+// Assign a secondary task (e.g. attack)
+taskMgr.SetTaskSecondary(new CTaskSimpleUseGun(...), TASK_SECONDARY_ATTACK);
+
+// Find any active task of a given type
+CTask* t = taskMgr.FindActiveTaskByType(TASK_COMPLEX_KILL_PED_ON_FOOT);
+
+// Type-safe lookup (NOTSA helper)
+auto* killTask = taskMgr.Find<CTaskComplexKillPedOnFoot>();
+
+// Abort everything immediately
+taskMgr.FlushImmediately();
+```
+
+## Task sequences
+
+When a script or AI needs to run a fixed ordered list of tasks (like an animation cut-scene or an arrest sequence), it uses task sequences.
+
+### CTaskComplexSequence
+
+Holds up to 8 tasks that execute one after another. Supports optional looping via `eRepeatMode::FOREVER`.
+
+```cpp
+class CTaskComplexSequence : public CTaskComplex {
+    int32       m_CurrTaskIdx{};    // Which task is running now
+    CTask*      m_Tasks[8]{};       // The ordered task list
+    eRepeatMode m_RepeatMode{};     // DONT_REPEAT or FOREVER
+    int32       m_RepeatedCnt{};    // How many times the sequence has looped
+    uint32      m_RefCnt{};         // Reference count from UseSequence instances
+};
+```
+
+### CTaskComplexUseSequence
+
+References a `CTaskComplexSequence` stored in the global `CTaskSequences` table by index. Useful when the same sequence needs to be shared or referenced from script.
+
+```cpp
+class CTaskComplexUseSequence : public CTaskComplex {
+    int32 m_nSequenceIndex{};         // Index into CTaskSequences::ms_taskSequence
+    int32 m_nCurrentTaskIndex{};      // Current position in the sequence
+    int32 m_nEndTaskIndex{-1};        // Stop at this index (-1 = run to end)
+    int32 m_nSequenceRepeatedCount{}; // Loop counter
+};
+```
+
+## Notable task types
+
+Below is a curated subset of the task types available in `Tasks/TaskTypes/`:
+
+<AccordionGroup>
+  <Accordion title="Movement tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexWander` | Complex | Generic open-world wander behaviour |
+    | `CTaskComplexFollowNodeRoute` | Complex | Follow a node-based path |
+    | `CTaskComplexGoToPointAndStandStill` | Complex | Walk to a point and stop |
+    | `CTaskSimpleGoToPoint` | Simple | Step toward a point (one frame) |
+    | `CTaskSimpleAchieveHeading` | Simple | Rotate to face a direction |
+  </Accordion>
+  <Accordion title="Combat tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexKillPedOnFoot` | Complex | Top-level on-foot combat |
+    | `CTaskComplexKillPedOnFootArmed` | Complex | Armed on-foot combat |
+    | `CTaskComplexKillPedOnFootMelee` | Complex | Melee combat |
+    | `CTaskComplexKillPedOnFootStealth` | Complex | Stealth kill |
+    | `CTaskSimpleFight` | Simple | Single melee strike |
+    | `CTaskSimpleUseGun` | Simple | Fire the equipped weapon |
+  </Accordion>
+  <Accordion title="Vehicle tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexEnterCar` | Complex | Enter a vehicle as driver or passenger |
+    | `CTaskComplexLeaveCar` | Complex | Exit a vehicle |
+    | `CTaskComplexCarDrive` | Complex | Drive a vehicle |
+    | `CTaskComplexDriveToPoint` | Complex | Drive to a specific world coordinate |
+    | `CTaskSimpleCarGetIn` | Simple | Play get-in door animation |
+    | `CTaskSimpleCarGetOut` | Simple | Play get-out door animation |
+  </Accordion>
+  <Accordion title="Social and scripted tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexChat` | Complex | Two peds having a conversation |
+    | `CTaskComplexUseAttractor` | Complex | Use a scenario attractor |
+    | `CTaskComplexSunbathe` | Complex | Sunbathe sequence |
+    | `CTaskSimpleRunNamedAnim` | Simple | Play a named animation once |
+    | `CTaskSimpleSay` | Simple | Trigger a voice line |
+  </Accordion>
+  <Accordion title="Cop / law enforcement tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexBeCop` | Complex | High-level cop AI loop |
+    | `CTaskComplexPolicePursuit` | Complex | Chase the player |
+    | `CTaskComplexArrestPed` | Complex | Perform an arrest |
+    | `CTaskComplexWanderCop` | Complex | Cop-specific patrol wander |
+    | `CTaskComplexKillCriminal` | Complex | Cop pursues and kills a criminal |
+  </Accordion>
+  <Accordion title="Reaction and IK tasks">
+    | Task | Type | Description |
+    |---|---|---|
+    | `CTaskComplexHitResponse` | Complex | React to being hit |
+    | `CTaskComplexEvasiveCower` | Complex | Cower away from danger |
+    | `CTaskSimpleIKManager` | Simple | Manages all IK chains on a ped |
+    | `CTaskSimpleIKLookAt` | Simple | Look-at IK for the head |
+    | `CTaskSimpleIKPointArm` | Simple | Point arm IK at a target |
+  </Accordion>
+</AccordionGroup>
+
+## Task timer
+
+Tasks that need time-based expiry can hold an internal timer. `CTask::StopTimer(event)` is called by the event system to halt the timer early when a high-priority event interrupts the task, preventing stale timers from blocking future task transitions.
+
+## Integration with the AI system
+
+`CTaskManager::ManageTasks()` is called from `CPedIntelligence::UpdatePedTask()` every frame. The flow is:
+
+<Steps>
+  <Step title="Tick the active task">
+    The highest-priority non-null primary slot is ticked via its `ProcessPed` chain. Complex tasks delegate to their current sub-task recursively down the tree.
+  </Step>
+  <Step title="Handle sub-task completion">
+    When a simple sub-task returns `true` (finished), `SetNextSubTask` walks up the complex task tree calling `CreateNextSubTask` until a new sub-task is produced or the top-level task itself finishes.
+  </Step>
+  <Step title="Service secondary tasks">
+    Each non-null secondary task slot is ticked independently. Secondary tasks cannot block primary task transitions.
+  </Step>
+  <Step title="Event-driven interruption">
+    The event system (`CPedIntelligence::ProcessEvent`) can call `MakeAbortable` on the active task at any priority level. If the task consents, it is replaced with a new event-response task in `TASK_PRIMARY_EVENT_RESPONSE_TEMP` or `TASK_PRIMARY_EVENT_RESPONSE_NONTEMP`.
+  </Step>
+</Steps>
+
+<Tip>
+  Use `taskMgr.Find<T>()` (templated on a task class) for type-safe task lookups. It checks both the active task and all its sub-tasks in one call.
+</Tip>

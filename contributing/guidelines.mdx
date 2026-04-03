@@ -1,0 +1,190 @@
+---
+title: "Coding guidelines"
+description: "Rules and conventions for writing code in the GTA:SA Reversed project."
+---
+
+Read this before opening a pull request. These guidelines keep the codebase consistent and make reviews faster for everyone.
+
+## General rules
+
+<Warning>
+  Do not change code that is unrelated to your contribution. If a refactor is necessary, open a separate PR for it.
+</Warning>
+
+- Eliminate compiler warnings from your code before submitting.
+- Focus each PR on a single subject. PRs that touch many unrelated things are difficult to review and test.
+- If you intend to add non-vanilla features, discuss them in the community Discord first.
+- Test your changes in-game before opening a PR. Use the debug menu (**F7**) for quick access to missions and tools.
+- If you are unsure whether you tested enough, say so in the PR description.
+
+## Code style
+
+- **Indentation:** 4 spaces. **Line endings:** LF.
+- No Hungarian notation.
+- Member variable prefixes in classes:
+  - `m_` for non-static members
+  - `ms_` for static members
+  - No prefix in structs
+- Global variable prefixes:
+  - `s_` for file-local globals (only used in one `.cpp`)
+  - `g_` for globals used across multiple files
+- For anything not covered here, follow the existing code style.
+
+### Loops and ranges
+
+Prefer range-based for loops and `std::ranges` / `std::views` utilities:
+
+```cpp
+// Good
+for (auto& element : array) { ... }
+
+// Bad
+for (int i = 0; i < std::size(array); i++) { ... }
+```
+
+Use `rng::` as a shorthand for `std::ranges` and `rngv::` for `std::views`:
+
+```cpp
+// When you need both the index and the value
+for (auto&& [i, e] : rngv::enumerate(array)) { ... }
+```
+
+When a fixed-size array has an associated dynamic count, use `std::span` or `rng::views::take`:
+
+```cpp
+// Bad
+for (auto i = 0u; i < m_numThings; i++) { ... }
+
+// Good
+for (auto& thing : std::span{ m_things, m_numThings }) { ... }
+
+// Also good
+for (auto& thing : m_things | rng::views::take(m_numThings)) { ... }
+```
+
+<Tip>
+  If you call one of these span/take expressions more than once, extract it into a helper in the header:
+
+  ```cpp
+  auto GetActiveThings() {
+      return std::span{ m_things, m_numThings };
+  }
+  ```
+</Tip>
+
+### Miscellaneous style rules
+
+- Use `f` suffix on float literals (`1.0f`, not `1.0`).
+- Use `std` library functions for `min`, `max`, `lerp`, etc.
+- `CVector` is interchangeable with three floats; `CVector2D` with two floats.
+- Use lambdas for repetitive local procedures inside a function.
+- Use `constexpr` variables instead of macros for constants.
+- Use `static inline` in headers instead of `extern` or bare `static`:
+
+```cpp
+class Foo {
+    // Bad
+    static uint32& m_FooCount;
+
+    // Good
+    static inline auto& m_FooCount = StaticRef<uint32, 0xDEADBEEF>();
+};
+```
+
+- Prefer getters and setters over direct member access.
+
+## Types
+
+- Use `auto` in function bodies when the type is clear from context.
+- Guess enum value types where possible, or leave a `// TODO` comment.
+- Maintain `const` correctness, especially on class methods.
+- Prefer SA types over RenderWare types — use `CVector` instead of `RwV3d`, `CRGBA` instead of `RwRGBA`. Exception: `RwMatrix` is fine to keep.
+- Use fixed-width integer types: `uint8`, `int32`, `uint32`, etc.
+- Do not use Win32 integer types outside of Win32-specific code (`DWORD` → `uint32`).
+- Use `unsigned` types for array sizes and counts.
+- Prefer `std::array` over C-style arrays — it has bounds checking in debug builds.
+
+## Fixing bugs
+
+<Note>
+  Bug fixes must be guarded so they can be toggled at runtime.
+</Note>
+
+When you find a bug, fix it and guard the fix:
+
+```cpp
+// Preferred: runtime toggle
+if (notsa::IsFixBugs()) {
+    // corrected behavior here
+}
+
+// Fallback when runtime toggle is impractical
+#ifdef FIX_BUGS
+// Bug fixing code here
+#endif
+```
+
+Always leave a comment explaining what the original bug was, even if you cannot fix it right away.
+
+### Using `assert`
+
+Use `assert` liberally — if something could be out of bounds or otherwise invalid, add an assertion:
+
+```cpp
+assert(index < m_numThings); // catches bugs early in debug builds
+```
+
+<Warning>
+  Do not add early-return guards for error conditions. Use `assert` instead so bugs surface visibly in debug builds rather than being silently swallowed.
+</Warning>
+
+## GXT text handling
+
+GXT is GTA's translated string format. Its code page is a partial superset of ASCII — most characters are identical except for `^`, `[`, and `]`, which map to `¡`, `<`, and `>` respectively. Strings are one byte per character, null-terminated, and safe to use with standard C string functions.
+
+| Task | Function |
+|---|---|
+| Safe conversion from ASCII to GXT | `AsciiToGxtChar` |
+| Safe conversion from GXT to UTF-8 | `GxtCharToUTF8` |
+| Implicit ASCII → GXT (only when all chars are ASCII) | `GxtCharFromAscii` |
+| Implicit GXT → ASCII (only when all chars are ASCII) | `AsciiFromGxtChar` |
+| GXT string literal | `""_gxt` |
+
+<Warning>
+  Do not assume anything about the GXT encoding beyond what is stated above. Always use the conversion functions.
+</Warning>
+
+## The NOTSA helper convention
+
+Helper functions that exist purely to improve readability — and have no equivalent in the original game code — are marked with a `// NOTSA` comment. You can see this pattern in `Clock.cpp`:
+
+```cpp
+if (gbFreezeTime) { // NOTSA
+    ms_nLastClockTick = CTimer::GetTimeInMS();
+}
+```
+
+- If you add helper functions inside a source file (`.cpp`), mark them `static`.
+- Look for existing NOTSA helpers before writing new code — you may already have what you need.
+- Add new helpers where they would benefit readability for future contributors.
+
+## Contributing process
+
+<Steps>
+  <Step title="Read these guidelines">
+    Make sure you understand the rules above before writing any code.
+  </Step>
+  <Step title="Write and test your code">
+    Build the DLL and test in-game. The debug menu (**F7**) gives you quick access to missions, cheats, and hook toggles.
+  </Step>
+  <Step title="Keep PRs focused">
+    One PR per topic. Avoid bundling unrelated changes — they slow down review and make testing harder.
+  </Step>
+  <Step title="Open the PR">
+    Describe what you changed, what you tested, and mention any areas you were unable to test. Link any relevant issues or discussions.
+  </Step>
+</Steps>
+
+<Tip>
+  Check the [GitHub discussions](https://github.com/gta-reversed/gta-reversed/discussions/402) for ideas on what to work on next.
+</Tip>

@@ -1,0 +1,99 @@
+---
+title: "Architecture overview"
+description: "How gta-reversed is structured as a DLL that reimplements and hooks into GTA San Andreas."
+---
+
+GTA:SA Reversed is a C++ DLL that is injected into the GTA San Andreas process at startup. Rather than replacing the executable, it patches individual functions in-place, redirecting GTA's code to the reimplemented equivalents—while still allowing the original functions to be called for any code that has not yet been reversed.
+
+## Directory layout
+
+The `source/` directory is organized into the following top-level folders:
+
+| Directory | Purpose |
+|---|---|
+| `source/game_sa/` | The main reversed game code. Every class here (e.g. `CEntity`, `CVehicle`, `CPathFind`) mirrors a class from the original executable. |
+| `source/reversiblehooks/` | The hook infrastructure. Provides `ReversibleHooks::Install`, `InstallVirtual`, and the macro DSL used in every `InjectHooks()` function. |
+| `source/reversiblebugfixes/` | Opt-in bug fixes that can be toggled independently of function reversal hooks. |
+| `source/extensions/` | NOTSA utility code: `EntityRef`, casting helpers, `CommandLine`, configuration loading, and other helpers that don't exist in the original game. |
+| `source/toolsmenu/` | The in-game ImGui debug menu (toggled with **F7**), including all `DebugModules/` that expose runtime inspection and hook-toggling UI. |
+| `source/app/` | Platform and RenderWare integration, input handling, and the application entry point. |
+
+## DLL injection flow
+
+When the DLL is loaded by the game process, execution follows this path:
+
+<Steps>
+  <Step title="DllMain receives DLL_PROCESS_ATTACH">
+    `source/dllmain.cpp` is the entry point. It allocates a console, loads the `gta-reversed.ini` configuration file, and then calls `InjectHooksMain()`.
+
+    ```cpp
+    // source/dllmain.cpp
+    case DLL_PROCESS_ATTACH:
+        DisplayConsole();
+        CommandLine::Load(__argc, __argv);
+        LoadConfigurations();
+        InjectHooksMain(hModule);
+        ApplyCommandLineHookSettings();
+        break;
+    ```
+  </Step>
+  <Step title="InjectHooksMain() iterates every reversed class">
+    `source/InjectHooksMain.cpp` calls each class's static `InjectHooks()` method in turn. There are several hundred of these calls, one per reversed class or subsystem.
+
+    ```cpp
+    // source/InjectHooksMain.cpp (excerpt)
+    CEntity::InjectHooks();
+    CPhysical::InjectHooks();
+    CPed::InjectHooks();
+    CVehicle::InjectHooks();
+    CPathFind::InjectHooks();
+    // ... hundreds more
+    ```
+  </Step>
+  <Step title="Each InjectHooks() registers hooks via the macro DSL">
+    Inside every class's `InjectHooks()`, the `RH_Scoped*` macros call `ReversibleHooks::Install()` or `ReversibleHooks::InstallVirtual()`, which write a relative x86 `JMP` instruction over the start of the original GTA function.
+
+    ```cpp
+    // source/game_sa/PathFind.cpp (excerpt)
+    void CPathFind::InjectHooks() {
+        RH_ScopedClass(CPathFind);
+        RH_ScopedCategoryGlobal();
+
+        RH_ScopedInstall(Shutdown, 0x450950);
+        RH_ScopedInstall(UpdateStreaming, 0x450A60);
+        RH_ScopedInstall(ComputeRoute, 0x452760, { .reversed = false });
+    }
+    ```
+  </Step>
+  <Step title="Command-line hook settings are applied">
+    After all hooks are registered, `ApplyCommandLineHookSettings()` reads command-line flags and disables individual hooks or entire categories at startup. Supported flags: `--unhook-all` (disable everything), `--unhook-except <path>` (re-enable specific paths after unhooking all), and individual `--unhook <path>` to disable specific hooks.
+  </Step>
+</Steps>
+
+## Two-way hook system
+
+Every hook is bidirectional. The `HookInstallOptions` struct controls the direction a hook is active in:
+
+- **`enabled = true` (default)** — GTA's function address is overwritten with a `JMP` to our implementation. GTA calls hit our code.
+- **`enabled = false`** — Our function address is overwritten with a `JMP` back to GTA's original code. Our code calls GTA's implementation.
+
+This means a function that is not yet reversed (marked `{ .reversed = false }`) will still compile and link correctly—the game will simply use the original implementation until the reversal is complete, at which point flipping `reversed` to `true` activates our code without any other changes.
+
+The hook state can also be toggled at runtime from the **F7** debug menu or via `ReversibleHooks::SetCategoryOrItemStateByPath()`.
+
+## Further reading
+
+<CardGroup cols={2}>
+  <Card title="The hook system" href="/architecture/hook-system">
+    Detailed reference for `ReversibleHooks::Install`, the macro DSL, and runtime toggling.
+  </Card>
+  <Card title="Entity hierarchy" href="/architecture/entities">
+    `CPlaceable` → `CEntity` → `CPhysical` → `CPed`, `CVehicle`, `CObject`, and friends.
+  </Card>
+  <Card title="Vehicle hierarchy" href="/architecture/vehicles">
+    `CVehicle` base class and every concrete vehicle subtype (`CAutomobile`, `CBike`, `CBoat`, …).
+  </Card>
+  <Card title="Script engine" href="/architecture/scripts">
+    The SCM system, `CTheScripts`, `CRunningScript`, and the command parser infrastructure.
+  </Card>
+</CardGroup>

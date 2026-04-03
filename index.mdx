@@ -1,97 +1,63 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "GTA:SA Reversed"
+description: "A community-driven C++ reimplementation of Grand Theft Auto: San Andreas — reversing every function, fixing bugs, and building toward a standalone executable."
 ---
 
-## Setting up
+## Welcome to GTA:SA Reversed
 
-Get your documentation site up and running in minutes.
+GTA:SA Reversed is an open-source project that reimplements Grand Theft Auto: San Andreas (1.0 US) function-by-function in modern C++23. The result is a DLL that injects into the game via an ASI loader, replacing original game functions with fully documented, reversible equivalents — while keeping the game running identically to the original.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+With **~7,965 functions** reversed across **700 classes** (approximately 79% complete), this is one of the most comprehensive reverse-engineering efforts in the GTA modding community.
 
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="circle-info" href="/introduction">
+    Learn what this project is, how it works, and what makes it different from traditional mods.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Build the project" icon="hammer" href="/building">
+    Set up Visual Studio, Conan, and CMake to compile the DLL from source.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Game setup" icon="gamepad" href="/game-setup">
+    Configure GTA:SA with the correct executable and ASI loader to run your build.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Contributing" icon="code-pull-request" href="/contributing/guidelines">
+    Follow coding guidelines and learn how to reverse a function and open a PR.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## How it works
 
-Everything you need to create world-class documentation.
+<Steps>
+  <Step title="Build the DLL">
+    Clone the repository, install dependencies with Conan, generate a Visual Studio solution with CMake, and compile `gta_reversed.asi`.
+  </Step>
+  <Step title="Install the ASI loader">
+    Place Silent's ASI Loader into your GTA:SA directory so it automatically loads `.asi` files on game start.
+  </Step>
+  <Step title="Run the game">
+    Launch GTA:SA with the Compact exe. The DLL injects and replaces original functions with reversed implementations — the game runs as normal.
+  </Step>
+  <Step title="Modify and test">
+    Edit reversed C++ code, recompile, and attach a debugger via ReAttach. Changes take effect immediately in the running game.
+  </Step>
+</Steps>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Explore the codebase
 
-## Need inspiration?
+<CardGroup cols={2}>
+  <Card title="Architecture overview" icon="sitemap" href="/architecture/overview">
+    Understand the project structure, the hook system, and how function injection works.
+  </Card>
+  <Card title="Hook system" icon="link" href="/architecture/hook-system">
+    Deep-dive into reversible hooks — installing, toggling, and organizing them by category.
+  </Card>
+  <Card title="Entity hierarchy" icon="layer-group" href="/architecture/entities">
+    Explore the full entity class hierarchy: Ped, Vehicle, Building, Object, and Physical.
+  </Card>
+  <Card title="Bug fix framework" icon="bug-slash" href="/systems/bug-fixes">
+    Learn how named, reversible bug fixes are defined, credited, and conditionally applied.
+  </Card>
+</CardGroup>
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+  This project requires a legally-owned copy of GTA:SA. The assets are not distributed — only the reimplemented code.
+</Note>

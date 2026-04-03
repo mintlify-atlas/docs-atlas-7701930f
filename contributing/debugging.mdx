@@ -1,0 +1,109 @@
+---
+title: "Debugging"
+description: "How to attach a debugger to GTA:SA, use the in-game debug menu, and troubleshoot common issues."
+---
+
+## Prerequisites
+
+Before debugging, make sure:
+
+- You have built the DLL successfully.
+- You are running the **Compact exe** (exactly `5,189,632 bytes` / 4.94 MiB). Using any other exe will cause random crashes.
+- No unsupported third-party plugins are loaded. Only the plugins shipped in `contrib/plugins.zip` are tested.
+
+<Warning>
+  The Compact exe is **not** the same as the 1.0 US exe. Verify the file size before debugging.
+</Warning>
+
+## Setting up the DLL
+
+You have two options for getting the DLL into GTA:SA's `scripts/` folder.
+
+### Option 1: Use install.py (recommended)
+
+Run `contrib/install.py` with administrator privileges from the project root:
+
+```bash
+python contrib/install.py
+```
+
+This creates a symlink from GTA:SA's `scripts/` folder to the build output directory. After that, every build automatically updates what the game loads — no manual copying required.
+
+<Note>
+  Administrator privileges are required on Windows to create symlinks.
+</Note>
+
+### Option 2: Copy manually
+
+Copy the built `.asi` file into the `scripts/` folder of your GTA:SA installation after each build.
+
+## Attaching the debugger
+
+<Steps>
+  <Step title="Install the ReAttach plugin">
+    Install the [ReAttach plugin](https://marketplace.visualstudio.com/items?itemName=ErlandR.ReAttach) from the Visual Studio Marketplace. It adds a toolbar button that re-attaches to the last debugged process in one click, which saves time when the game restarts frequently.
+  </Step>
+
+  <Step title="Launch the game">
+    Start GTA:SA normally. Wait until you reach the main menu or the point you want to debug.
+  </Step>
+
+  <Step title="Attach Visual Studio">
+    Use ReAttach's toolbar button to attach to the `gta_sa.exe` process, or go to **Debug → Attach to Process** and select it manually.
+
+    Once attached, breakpoints in your reversed source files will work normally.
+  </Step>
+</Steps>
+
+## Edit & Continue
+
+The project is configured with the `/ZI` compile flag in `CMakeLists.txt`, which enables Edit & Continue support in Visual Studio. While the game is paused at a breakpoint, you can modify a function and continue execution without rebuilding the full DLL.
+
+<Note>
+  Edit & Continue works on function bodies. Changes to class layouts or hook registration require a full rebuild.
+</Note>
+
+## In-game debug menu (F7)
+
+Press **F7** while in-game to open the debug menu. It provides:
+
+<CardGroup cols={2}>
+  <Card title="Hook toggles" icon="toggle-on">
+    Enable or disable individual hooks by category and function name. Turning a hook off reverts to the original game code for that function, which is useful for isolating regressions.
+  </Card>
+  <Card title="Tool inputs" icon="wrench">
+    Text and numeric inputs for testing specific code paths, such as teleporting to coordinates or triggering a specific mission state.
+  </Card>
+  <Card title="Mission access" icon="map">
+    Quick access to missions and game states without needing to progress through the story.
+  </Card>
+  <Card title="Cheat shortcuts" icon="code">
+    Activate game cheats directly from the menu to set up test scenarios quickly.
+  </Card>
+</CardGroup>
+
+Hooks registered with `{ .reversed = false }` are locked and cannot be toggled from the menu. Hooks registered without that option (or with `reversed: true`) can be switched on and off at runtime.
+
+## Common issues
+
+<AccordionGroup>
+  <Accordion title="Game crashes immediately on launch">
+    Check that you are using the Compact exe (`5,189,632 bytes`). Any other version of the exe will cause random crashes because function addresses differ.
+  </Accordion>
+
+  <Accordion title="Game crashes after attaching the debugger">
+    Another plugin may be conflicting. Only the plugins in `contrib/plugins.zip` are tested and supported. Remove any other ASI plugins from the `scripts/` folder and try again.
+  </Accordion>
+
+  <Accordion title="My breakpoint is never hit">
+    Confirm that the DLL loaded correctly. Check that the `scripts/` folder contains the latest build (or that the `install.py` symlink is working). Also verify that the function's hook is enabled in the F7 menu — if `reversed: false` was used, the original code runs instead of yours.
+  </Accordion>
+
+  <Accordion title="Edit & Continue says 'changes not allowed'">
+    Edits that change a class's memory layout or add/remove functions cannot be applied with Edit & Continue. Do a full rebuild (`cmake --build build`) and re-attach.
+  </Accordion>
+
+  <Accordion title="Debugger shows no symbols">
+    Make sure you are building in **Debug** configuration. Release builds strip symbols. If you built with CMake directly, pass `-DCMAKE_BUILD_TYPE=Debug` or select the Debug configuration in Visual Studio.
+  </Accordion>
+</AccordionGroup>

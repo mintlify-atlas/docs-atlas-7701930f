@@ -1,0 +1,84 @@
+---
+title: "Introduction"
+description: "A function-by-function C++ reimplementation of GTA San Andreas, injected as a DLL via ASI loader."
+---
+
+GTA:SA Reversed is an open-source project that reimplements Grand Theft Auto: San Andreas function by function in modern C++. Building the project produces a DLL that is injected into the game at runtime via an ASI loader. Once injected, the game's original functions are replaced with the reversed equivalents — the game behaves identically, but the code is now fully readable, modifiable, and extensible.
+
+The long-term goal is to reverse every function and class in the game, ultimately producing a standalone executable that no longer depends on the original binary.
+
+<Note>
+  You must own a legitimate copy of GTA: San Andreas and its original game assets to use this project. The DLL replaces code at runtime but does not include or distribute any game content.
+</Note>
+
+## How it works
+
+When `gta_reversed.asi` is loaded by the ASI loader at game startup, `DllMain` fires and calls `InjectHooksMain`. This function installs reversible hooks — each hook patches the original game's function address to jump to the reimplemented C++ equivalent. If a hook is disabled, the original game function runs instead. This makes every hook individually toggleable without rebuilding.
+
+```cpp
+// source/dllmain.cpp — entry point
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
+{
+    switch (ul_reason_for_call)
+    {
+    case DLL_PROCESS_ATTACH:
+        LoadConfigurations();
+        InjectHooksMain(hModule);
+        ApplyCommandLineHookSettings();
+        break;
+    }
+    return TRUE;
+}
+```
+
+## Project stats
+
+| Metric | Value |
+|--------|-------|
+| Functions reversed | ~7,965 |
+| Total classes | ~700 |
+| Classes fully reversed | ~556 (79%) |
+| Language standard | C++23 |
+| Target platform | Windows x86 (GTA:SA Compact exe) |
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Reversible hooks" icon="toggle-on">
+    Every replaced function is individually togglable at runtime. Disable any hook to fall back to the original game code — no rebuild required.
+  </Card>
+  <Card title="Bug fix framework" icon="bug">
+    A structured system for applying and tracking fixes to original game bugs, separate from the reversal work.
+  </Card>
+  <Card title="ImGui debug menu" icon="display">
+    An in-game debug overlay built with Dear ImGui for inspecting game state, toggling hooks, and testing changes live.
+  </Card>
+  <Card title="Modern C++23" icon="code">
+    The entire codebase targets C++23 with MSVC, using modern idioms, `std::format`, concepts, and ranges throughout.
+  </Card>
+  <Card title="SDL3 + OpenAL audio" icon="music">
+    Audio is handled via SDL3 and OpenAL, replacing the original DirectInput/DirectSound stack with portable modern equivalents.
+  </Card>
+  <Card title="spdlog + Tracy" icon="chart-line">
+    Structured logging via spdlog and optional frame profiling via Tracy for performance analysis during development.
+  </Card>
+</CardGroup>
+
+## Community
+
+Join the project's Discord server to ask questions, discuss reversing work, and coordinate contributions.
+
+[**GTA Groupies — discord.gg/FG8XJ5Npqe**](https://discord.gg/FG8XJ5Npqe)
+
+The invite is permanent and shareable.
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Building from source" icon="hammer" href="/building">
+    Set up your build environment and compile the DLL.
+  </Card>
+  <Card title="Game setup" icon="gamepad" href="/game-setup">
+    Configure your GTA:SA installation to load the built DLL.
+  </Card>
+</CardGroup>

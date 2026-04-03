@@ -1,0 +1,219 @@
+---
+title: "Script engine"
+description: "GTA:SA's SCM script system, CTheScripts, CRunningScript, and the reversed command infrastructure."
+---
+
+GTA San Andreas drives its entire mission and world-event logic through a bytecode scripting system known as the **SCM** (Script Control Module). Scripts are compiled `.scm` files loaded from the game data. The reversed implementation lives in `source/game_sa/Scripts/`.
+
+## Overview
+
+The SCM engine executes one or more concurrently running script instances. Each instance reads opcode instructions from a byte stream, dispatches them to C++ handler functions, and maintains its own local variables and call stack. At any point there can be a main script, several mission scripts, external streamed scripts, and many short-lived "brain" scripts attached to peds and vehicles.
+
+---
+
+## `CTheScripts`
+
+Defined in `source/game_sa/Scripts/TheScripts.h`. A purely static class (all members are `static`); there is no instance to construct.
+
+`CTheScripts` acts as the global script manager. It holds:
+
+- The active and idle script linked lists (`pActiveScripts`, `pIdleScripts`)
+- Script resource pools: spheres, effect systems, search lights, checkpoints, sequence tasks
+- The mission cleanup tracker (`MissionCleanUp`)
+- The stuck-car and upside-down car monitors
+- The scripted brain registry (`ScriptsForBrains`)
+- Global script flags used by the game world
+
+```cpp
+// source/game_sa/Scripts/TheScripts.h (selected static members)
+static inline auto& pActiveScripts  = StaticRef<CRunningScript*>(0xA8B42C);
+static inline auto& pIdleScripts    = StaticRef<CRunningScript*>(0xA8B428);
+static inline auto& MissionCleanUp  = StaticRef<CMissionCleanup>(0xA90850);
+static inline auto& StuckCars       = StaticRef<CStuckCarCheck>(0xA90AB0);
+static inline auto& OnAMissionFlag  = StaticRef<int32>(0xA476AC);
+static inline auto& DbgFlag         = StaticRef<bool>(0x859CF8);
+static inline auto& CommandsExecuted = StaticRef<uint16>(0xA447F4);
+static inline auto& ScriptsUpdated  = StaticRef<uint16>(0xA447F8);
+```
+
+Key script thing arrays (capped at compile-time constants):
+
+```cpp
+static inline auto& ScriptSphereArray       = StaticRef<std::array<tScriptSphere, ...>>(0xA91268);
+static inline auto& ScriptCheckpointArray   = StaticRef<std::array<tScriptCheckpoint, ...>>(0xA44070);
+static inline auto& ScriptEffectSystemArray = StaticRef<std::array<tScriptEffectSystem, ...>>(0xA44110);
+static inline auto& BuildingSwapArray       = StaticRef<std::array<tBuildingSwap, ...>>(0xA44A30);
+```
+
+---
+
+## `CRunningScript`
+
+Defined in `source/game_sa/Scripts/RunningScript.h`. One instance per concurrently active script.
+
+### Execution state
+
+```cpp
+// source/game_sa/Scripts/RunningScript.h (selected members)
+class CRunningScript {
+    CRunningScript* m_pNext, *m_pPrev;         // doubly-linked list (active or idle)
+    scm::ShortString m_szName;                 // debug name (8 chars, null-terminated)
+    uint8* m_BaseIP;                           // start of the script bytecode
+    uint8* m_IP;                               // current instruction pointer
+    std::array<uint8*, 8>  m_IPStack;          // call stack (GOSUB / RETURN)
+    uint16                 m_StackDepth;
+    std::array<tScriptParam, 34> m_LocalVars;  // 32 local vars + 2 timers
+    bool   m_IsActive;
+    bool   m_CondResult;                       // result of the last conditional command
+    bool   m_UsesMissionCleanup;
+    int32  m_WakeTime;                         // sleep until CTimer::m_snTimeInMilliseconds >= this
+    uint16 m_AndOrState;                       // compound AND/OR condition state
+    bool   m_NotFlag;                          // negate next conditional result
+    bool   m_ThisMustBeTheOnlyMissionRunning;
+};
+```
+
+### SCM instruction format
+
+Each instruction is 2 bytes (`scm::Instruction`):
+
+```cpp
+// source/game_sa/Scripts/RunningScript.h
+struct Instruction {
+    eScriptCommands Command : 15; // opcode ID
+    uint16          NotFlag :  1; // negate the boolean return value
+};
+```
+
+After the instruction word, zero or more typed parameters follow. The `eScriptParameterType` enum identifies each one:
+
+| Type | Description |
+|---|---|
+| `SCRIPT_PARAM_STATIC_INT_32BITS` | Inline 32-bit integer |
+| `SCRIPT_PARAM_STATIC_FLOAT` | Inline float |
+| `SCRIPT_PARAM_GLOBAL_NUMBER_VARIABLE` | Reference to a global `int32` variable |
+| `SCRIPT_PARAM_LOCAL_NUMBER_VARIABLE` | Reference to a local `int32` variable |
+| `SCRIPT_PARAM_STATIC_SHORT_STRING` | Inline 8-byte string |
+| `SCRIPT_PARAM_STATIC_LONG_STRING` | Inline 16-byte string |
+| `SCRIPT_PARAM_STATIC_PASCAL_STRING` | Variable-length string (1-byte length prefix) |
+| `SCRIPT_PARAM_GLOBAL_NUMBER_ARRAY` | Global array element access |
+
+### Compound conditionals
+
+SA's script VM supports `if (A && B && C)` and `if (A || B || C)` using a `COMMAND_ANDOR` prefix followed by `n` condition commands. The `CRunningScript::LogicalOpType` enum tracks the current compound state (`ANDS_1`–`ANDS_8`, `ORS_1`–`ORS_8`), stored in `m_AndOrState`.
+
+---
+
+## Opcode / command system
+
+### `eScriptCommands`
+
+Every script opcode is a value in the `eScriptCommands` enum (defined in `source/game_sa/Scripts/eScriptCommands.h`). Examples:
+
+```cpp
+COMMAND_WAIT,                              // 0x0001
+COMMAND_GOTO,                              // 0x0002
+COMMAND_GOSUB,                             // 0x0050
+COMMAND_ANDOR,                             // 0x00D6
+COMMAND_IS_INT_VAR_GREATER_THAN_NUMBER,    // 0x000C
+COMMAND_GET_CAR_SPEED,                     // 0x02EB
+COMMAND_SET_CAR_PROOFS,                    // 0x02D3
+```
+
+`CRunningScript` dispatches opcodes via a table of `CommandHandlerFn_t` function pointers (`s_OriginalCommandHandlerTable`), where each slot corresponds to a range of command IDs. Our reversals inject into this dispatch path.
+
+---
+
+## `Commands/` directory
+
+`source/game_sa/Scripts/Commands/` contains one `.cpp` file per logical domain of reversed script commands. Each file implements a set of free functions and registers them via `REGISTER_COMMAND_HANDLER`.
+
+| File | Domain |
+|---|---|
+| `BasicCommands.cpp` | Flow control, GOTO, GOSUB, WAIT |
+| `VehicleCommands.cpp` | Vehicle queries and manipulation |
+| `CharacterCommands.cpp` | Ped properties and actions |
+| `PlayerCommands.cpp` | Player-specific commands |
+| `CameraCommands.cpp` | Camera positioning and cuts |
+| `ClockCommands.cpp` | In-game clock queries and manipulation |
+| `ComparasionCommands.cpp` | Comparison operators for script conditionals |
+| `ConversationCommands.cpp` | Dialogue and conversation system |
+| `DrawCommands.cpp` | 2D drawing |
+| `GameCommands.cpp` | Game state (weather, time, wanted) |
+| `GenericCommands.cpp` | Miscellaneous generic commands |
+| `MathCommands.cpp` | Arithmetic, comparison |
+| `MissionCommands.cpp` | Mission lifecycle management |
+| `ObjectCommands.cpp` | Scripted object management |
+| `PadCommands.cpp` | Gamepad / controller input queries |
+| `PathCommands.cpp` | Path-finding queries |
+| `PedCommands.cpp` | Generic ped placement / querying |
+| `PlayerCommands.cpp` | Player-specific commands |
+| `ScriptCommands.cpp` | Script lifecycle |
+| `SequenceCommands.cpp` | Task sequence management |
+| `StatCommands.cpp` | Player stats |
+| `TextCommands.cpp` | On-screen text display |
+| `UnusedCommands.cpp` | Commands unused by the original game |
+| `UtilityCommands.cpp` | Utility / helper commands |
+| `ZoneCommands.cpp` | Zone queries |
+| `CLEO/` | CLEO compatibility command extensions |
+
+### Registration pattern
+
+```cpp
+// source/game_sa/Scripts/Commands/VehicleCommands.cpp (excerpt)
+void notsa::script::commands::vehicle::RegisterHandlers() {
+    REGISTER_COMMAND_HANDLER_BEGIN("Vehicle");
+
+    REGISTER_COMMAND_HANDLER(COMMAND_GET_CAR_SPEED,              GetCarSpeed);
+    REGISTER_COMMAND_HANDLER(COMMAND_SET_CAR_PROOFS,             SetCarProofs);
+    REGISTER_COMMAND_HANDLER(COMMAND_CLEAR_HELI_ORIENTATION,     ClearHeliOrientation);
+    REGISTER_COMMAND_HANDLER(COMMAND_SET_CAR_DRIVING_STYLE,      SetCarDrivingStyle);
+    REGISTER_COMMAND_HANDLER(COMMAND_IS_FIRST_CAR_COLOUR,        IsFirstCarColor);
+    REGISTER_COMMAND_HANDLER(COMMAND_SET_CAR_ALWAYS_CREATE_SKIDS, SetCarAlwaysCreateSkids);
+
+    REGISTER_COMMAND_UNIMPLEMENTED(COMMAND_IS_TAXI);   // known but not yet reversed
+    REGISTER_COMMAND_UNIMPLEMENTED(COMMAND_IS_BOAT);
+}
+```
+
+`REGISTER_COMMAND_HANDLER` both installs the C++ handler in the dispatch table **and** (when `NOTSA_WITH_SCRIPT_COMMAND_HOOKS` is defined) calls `RH_ScopedInstallScriptCommand` to register the hook in the reversible-hook tree—making it toggleable from the F7 debug menu.
+
+---
+
+## `CommandParser/` infrastructure
+
+`source/game_sa/Scripts/CommandParser/` provides the type-safe argument reading and writing layer used by all reversed command implementations.
+
+The core template in `Parser.hpp` is `CollectArgsAndCall`:
+
+```cpp
+// source/game_sa/Scripts/CommandParser/Parser.hpp (simplified)
+template<typename T_FnRet, typename... T_FnArgs, typename... T_CollectedArgs>
+OpcodeResult CollectArgsAndCall(CRunningScript* S, eScriptCommands cmd,
+                                T_FnRet(*fn)(T_FnArgs...), T_CollectedArgs&&... args)
+{
+    if constexpr (sizeof...(T_CollectedArgs) == sizeof...(T_FnArgs)) {
+        // All arguments collected — call the handler
+        T_FnRet ret = std::invoke(fn, std::forward<T_CollectedArgs>(args)...);
+        StoreArg(S, ret); // write return value back into the script
+        return OR_CONTINUE;
+    } else {
+        // Read the next parameter from the instruction stream
+        using T_Next = nth_element_t<sizeof...(T_CollectedArgs), T_FnArgs...>;
+        return CollectArgsAndCall(S, cmd, fn, args..., Read<T_Next>(S));
+    }
+}
+```
+
+The `Read<T>(S)` and `StoreArg(S, value)` helpers handle the `eScriptParameterType` dispatch, so individual command implementations are plain C++ functions with typed parameters—no manual IP arithmetic required:
+
+```cpp
+// A complete reversed vehicle command implementation
+bool IsFirstCarColor(CVehicle& veh, int32 color) {
+    return veh.m_nPrimaryColor == color;
+}
+```
+
+<Tip>
+When reversing a new script command, implement it as a free function with typed parameters, then add a `REGISTER_COMMAND_HANDLER` line in the appropriate `Commands/*.cpp` file. The parser infrastructure handles all SCM parameter reading and result writing automatically.
+</Tip>

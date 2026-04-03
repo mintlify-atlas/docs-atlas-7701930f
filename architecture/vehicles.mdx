@@ -1,0 +1,194 @@
+---
+title: "Vehicle hierarchy"
+description: "CVehicle and its concrete subclasses, plus the handling data system."
+---
+
+All driveable vehicles in GTA San Andreas derive from `CVehicle`, which itself extends `CPhysical`. The concrete subclasses specialise the physics simulation and control logic for each vehicle category.
+
+## Class hierarchy
+
+```
+CPhysical
+└── CVehicle                   (source/game_sa/Entity/Vehicle/Vehicle.h)
+    ├── CAutomobile            (cars, trucks, vans, emergency vehicles, tanks)
+    │   ├── CMonsterTruck      (oversized off-road suspension)
+    │   └── CQuadBike          (quad-style bike handled as automobile)
+    ├── CBike                  (motorcycles)
+    │   └── CBmx               (pedal bicycle)
+    ├── CBoat                  (watercraft)
+    ├── CHeli                  (helicopters)
+    ├── CPlane                 (fixed-wing aircraft)
+    ├── CTrain                 (rail vehicles)
+    └── CTrailer               (towable trailers)
+```
+
+---
+
+## `CVehicle`
+
+Defined in `source/game_sa/Entity/Vehicle/Vehicle.h`. The base class for every vehicle.
+
+### Key members
+
+```cpp
+// source/game_sa/Entity/Vehicle/Vehicle.h (selected fields)
+CAEVehicleAudioEntity m_vehicleAudio;
+tHandlingData*        m_pHandlingData;       // pointer into cHandlingDataMgr's table
+tFlyingHandlingData*  m_pFlyingHandlingData; // non-null for aircraft
+CAutoPilot            m_autoPilot;           // NPC driving AI state machine
+
+uint8  m_nPrimaryColor;
+uint8  m_nSecondaryColor;
+uint8  m_nTertiaryColor;
+uint8  m_nQuaternaryColor;
+std::array<int16, 15> m_anUpgrades;          // SA vehicle mod slots
+```
+
+### Vehicle flags
+
+`CVehicle` has two 32-bit flag words (`m_nVehicleUpperFlags` / `m_nVehicleLowerFlags`) exposed as named bitfields:
+
+```cpp
+// source/game_sa/Entity/Vehicle/Vehicle.h (selected flags)
+uint32 bIsLawEnforcer           : 1; // police vehicle chasing player
+uint32 bEngineOn                : 1;
+uint32 bIsHandbrakeOn           : 1;
+uint32 bLightsOn                : 1;
+uint32 bIsDamaged               : 1;
+uint32 bCanBeDamaged            : 1;
+uint32 bTyresDontBurst          : 1;
+uint32 bCreatedAsPoliceVehicle  : 1;
+uint32 bIsRCVehicle             : 1; // remote-controlled (small RC car)
+uint32 bEngineBroken            : 1; // won't move even if occupied
+uint32 bSirenOrAlarm            : 1;
+uint32 bImpounded               : 1;
+uint32 bPartOfConvoy            : 1;
+uint32 bAlwaysSkidMarks         : 1;
+```
+
+### Vehicle appearance enum
+
+```cpp
+enum eVehicleAppearance {
+    VEHICLE_APPEARANCE_NONE        = 0,
+    VEHICLE_APPEARANCE_AUTOMOBILE  = 1,
+    VEHICLE_APPEARANCE_BIKE        = 2,
+    VEHICLE_APPEARANCE_HELI        = 3,
+    VEHICLE_APPEARANCE_BOAT        = 4,
+    VEHICLE_APPEARANCE_PLANE       = 5,
+};
+```
+
+---
+
+## Concrete vehicle types
+
+<CardGroup cols={2}>
+  <Card title="CAutomobile" icon="car">
+    `source/game_sa/Entity/Vehicle/Automobile.h`
+
+    The most common vehicle class. Covers all four-wheeled land vehicles: cars, trucks, vans, buses, fire trucks, and tanks. Manages a `CDamageManager`, six `CDoor` instances, four wheels with per-wheel suspension and skidmarks, and hydraulics.
+
+    Key exclusive members:
+    - `std::array<CDoor, 6> m_doors`
+    - `std::array<CColPoint, 4> m_wheelColPoint`
+    - `std::array<float, 4> m_fWheelsSuspensionCompression`
+    - `float m_fCarTraction`, `m_fTireTemperature`
+  </Card>
+  <Card title="CBike" icon="motorcycle">
+    `source/game_sa/Entity/Vehicle/Bike.h`
+
+    Motorcycles and mopeds. Uses `tBikeHandlingData` (fetched via `cHandlingDataMgr::GetBikeHandlingPointer`) for lean angles, traction balance, and steer multipliers.
+  </Card>
+  <Card title="CBmx" icon="bicycle">
+    `source/game_sa/Entity/Vehicle/Bmx.h`
+
+    Pedal bicycle. Derives from `CBike`. Adds bunny-hop and pedalling physics not present in motorcycle handling.
+  </Card>
+  <Card title="CBoat" icon="ship">
+    `source/game_sa/Entity/Vehicle/Boat.h`
+
+    Watercraft. Uses `tBoatHandlingData` for wave response, drag, and propeller force. The `CVehicle::m_pHandlingData` pointer is still set; boat-specific data is accessed via `cHandlingDataMgr::GetBoatPointer`.
+  </Card>
+  <Card title="CHeli" icon="helicopter">
+    `source/game_sa/Entity/Vehicle/Heli.h`
+
+    Helicopters and the Hydra VTOL. Uses `tFlyingHandlingData` (same struct as planes, with `FLIGHT_MODEL_HELI`). Manages rotor speed, collective, and blade tilt.
+  </Card>
+  <Card title="CPlane" icon="plane">
+    `source/game_sa/Entity/Vehicle/Plane.h`
+
+    Fixed-wing aircraft. `tFlyingHandlingData` with `FLIGHT_MODEL_PLANE` or `FLIGHT_MODEL_BARON`. The RC aircraft use `FLIGHT_MODEL_RC`.
+  </Card>
+  <Card title="CTrain" icon="train">
+    `source/game_sa/Entity/Vehicle/Train.h`
+
+    Rail vehicles. Moves along a fixed track node network. Manages a linked list of carriages.
+  </Card>
+  <Card title="CTrailer" icon="truck">
+    `source/game_sa/Entity/Vehicle/Trailer.h`
+
+    Towable trailers. Attached to a cab via `CPhysical::AttachEntityToEntity`. No engine; follows the towing vehicle.
+  </Card>
+</CardGroup>
+
+<Note>
+`CMonsterTruck` and `CQuadBike` both derive from `CAutomobile`. Monster trucks override suspension calculations for the extreme wheel height, while quads use a modified steering model.
+</Note>
+
+---
+
+## Handling data
+
+The handling system is managed by a global `cHandlingDataMgr` (defined in `source/game_sa/cHandlingDataMgr.h`). It loads `handling.cfg` at startup and builds typed arrays of handling entries.
+
+### `tHandlingData`
+
+The primary handling record for all land vehicles. A pointer to the correct entry is stored in `CVehicle::m_pHandlingData`.
+
+```cpp
+// source/game_sa/tHandlingData.h (selected fields)
+struct tHandlingData {
+    float   m_fMass;             // 1.0–50000.0 kg
+    float   m_fMassRecpr;        // = 1.f / m_fMass (precomputed)
+    CVector m_vecCentreOfMass;   // x, y, z offsets
+    float   m_fBuoyancyConstant;
+    // ... traction, brake, suspension, drift multipliers ...
+    eVehicleHandlingFlags m_nHandlingFlags;
+};
+```
+
+### Specialised handling structs
+
+| Struct | Used by | Location |
+|---|---|---|
+| `tBikeHandlingData` | `CBike`, `CBmx` | `source/game_sa/tBikeHandlingData.h` |
+| `tBoatHandlingData` | `CBoat` | `source/game_sa/tBoatHandlingData.h` |
+| `tFlyingHandlingData` | `CHeli`, `CPlane` | `source/game_sa/tFlyingHandlingData.h` |
+
+`cHandlingDataMgr` exposes typed accessors:
+
+```cpp
+tHandlingData*      GetVehiclePointer(uint32 handlingId);
+tBikeHandlingData*  GetBikeHandlingPointer(uint32 handlingId);
+tBoatHandlingData*  GetBoatPointer(uint8 handlingId);
+tFlyingHandlingData* GetFlyingPointer(uint8 handlingId);
+```
+
+`CVehicle::m_pFlyingHandlingData` is non-null only when the vehicle is an aircraft; land vehicles leave it as `nullptr`.
+
+### `cHandlingDataMgr` storage
+
+```cpp
+// source/game_sa/cHandlingDataMgr.h
+class cHandlingDataMgr {
+    std::array<tHandlingData,       210> m_aVehicleHandling;
+    std::array<tBikeHandlingData,    13> m_aBikeHandling;
+    std::array<tFlyingHandlingData,  24> m_aFlyingHandling;
+    std::array<tBoatHandlingData,    12> m_aBoatHandling;
+};
+VALIDATE_SIZE(cHandlingDataMgr, 0xC624);
+
+// The global singleton:
+static inline auto& gHandlingDataMgr = StaticRef<cHandlingDataMgr>(0xC2B9C8);
+```

@@ -1,0 +1,208 @@
+---
+title: "The hook system"
+description: "How ReversibleHooks::Install and the RH_Scoped macro DSL redirect GTA functions to reversed C++ implementations."
+---
+
+The hook system lives in `source/reversiblehooks/`. It is the mechanism by which every reversed function in the project is wired into (or disconnected from) the running GTA process. Hooks are **reversible**: they can be individually enabled or disabled at runtime without restarting the game.
+
+## Core functions
+
+### `ReversibleHooks::Install`
+
+```cpp
+// source/reversiblehooks/ReversibleHooks.h
+template <typename T>
+static void Install(
+    std::string_view   category,
+    std::string        fnName,
+    DWORD              installAddress,
+    T                  addressToJumpTo,
+    HookInstallOptions&& opt = {}
+);
+```
+
+Writes a 5-byte relative `JMP` opcode over the first bytes of the GTA function at `installAddress`, redirecting execution to `addressToJumpTo` (our reimplemented function). It simultaneously patches our function with a `JMP` back to the GTA original, so either side can call through to the other.
+
+The resulting hook is stored in the category tree under `category/fnName` and can be toggled at any time.
+
+### `ReversibleHooks::InstallVirtual`
+
+```cpp
+void InstallVirtual(
+    std::string_view   category,
+    std::string        fnName,
+    void**             vtblGTA,
+    void**             vtblOur,
+    void*              fnGTAAddr,
+    void*              fnOurAddr,
+    size_t             nVirtFns,
+    const HookInstallOptions& opt = {}
+);
+```
+
+Used for virtual functions. Rather than patching the function body directly, it swaps the vtable slot in GTA's vtable (`vtblGTA`) to point at our implementation, and swaps the corresponding slot in our vtable (`vtblOur`) to point at the GTA original. This preserves the full virtual dispatch chain for both sides.
+
+---
+
+## `HookInstallOptions`
+
+Every `Install` call accepts an optional `HookInstallOptions` struct:
+
+```cpp
+// source/reversiblehooks/ReversibleHooks.h
+struct HookInstallOptions {
+    bool reversed{ true };      // Has this function been fully reversed?
+    bool enabled{ reversed };   // Is the hook active by default?
+    bool locked{ !reversed };   // Prevent toggling from the GUI?
+    int  jmpCodeSize{ 5 };      // Bytes to overwrite (≥5; extra bytes become NOPs)
+    int  stackArguments{ -1 };  // ECX thunk argument count (-1 = no thunk)
+};
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `reversed` | `true` | Marks the function as fully reversed. Affects `enabled` and `locked` defaults. |
+| `enabled` | same as `reversed` | Whether GTA's address is redirected to our code on startup. |
+| `locked` | `!reversed` | When `true`, the hook cannot be toggled from the F7 debug menu. |
+| `jmpCodeSize` | `5` | How many bytes of the GTA function to overwrite. Any bytes after the 5-byte `JMP` are filled with `NOP (0x90)`. |
+| `stackArguments` | `-1` | When ≥0, generates an ECX-preservation thunk for `__thiscall` functions called from contexts that don't set ECX. |
+
+A not-yet-reversed function passes `{ .reversed = false }`, which sets `enabled = false` and `locked = true`—the hook is installed but inactive (calls fall through to GTA's original code) and cannot be accidentally enabled from the menu.
+
+---
+
+## Macro DSL
+
+Every `InjectHooks()` function uses a set of scoped macros that build the category path automatically and forward to `ReversibleHooks::Install` or `InstallVirtual`.
+
+### Scope setup macros
+
+These must appear at the top of each `InjectHooks()` function:
+
+```cpp
+// Use for a class. Sets the type alias RHCurrentNS and the scope name.
+RH_ScopedClass(CPathFind);
+
+// Use for a virtual class. Also captures the GTA and our vtable pointers.
+RH_ScopedVirtualClass(CEntity, 0x863928, 22); // (class, GTA vtbl addr, vtbl slot count)
+
+// Sets the category for all installs that follow.
+RH_ScopedCategory("Entity");          // e.g. "Entity/CEntity"
+RH_ScopedCategoryGlobal();            // Equivalent to RH_ScopedCategory("Global")
+```
+
+### Install macros
+
+| Macro | Installs | Notes |
+|---|---|---|
+| `RH_ScopedInstall(fn, addr, ...)` | Regular member function | Most common |
+| `RH_ScopedGlobalInstall(fn, addr, ...)` | Free / global function | Used for standalone functions |
+| `RH_ScopedOverloadedInstall(fn, suffix, addr, cast, ...)` | Overloaded member function | `cast` is the explicit function pointer type |
+| `RH_ScopedVMTInstall(fn, addr, ...)` | Virtual function (vtable slot) | Requires `RH_ScopedVirtualClass` |
+| `RH_ScopedVMTOverloadedInstall(fn, suffix, addr, cast, ...)` | Overloaded virtual function | Combines vtable swap + overload disambiguation |
+| `RH_ScopedInstallScriptCommand(cmd)` | SCM opcode handler | Used inside script command `RegisterHandlers()` |
+
+---
+
+## Real example: `CEntity::InjectHooks`
+
+The following is taken directly from `source/game_sa/Entity/Entity.cpp`:
+
+```cpp
+void CEntity::InjectHooks() {
+    RH_ScopedVirtualClass(CEntity, 0x863928, 22); // GTA's CEntity vtable is at 0x863928; 22 slots
+    RH_ScopedCategory("Entity");
+
+    // Regular (non-virtual) member functions
+    RH_ScopedInstall(Constructor, 0x532A90);
+    RH_ScopedInstall(Destructor,  0x535E90);
+
+    // Overloaded: Add() has two signatures; disambiguate with a suffix string
+    RH_ScopedOverloadedInstall(Add, "rect", 0x5347D0, void(CEntity::*)(const CRect&));
+
+    // Virtual functions: swaps vtable slots in both GTA's and our vtable
+    RH_ScopedVMTInstall(Remove,                           0x534AE0);
+    RH_ScopedVMTInstall(SetModelIndex,                    0x532AE0);
+    RH_ScopedVMTInstall(CreateRwObject,                   0x533D30);
+    RH_ScopedVMTInstall(DeleteRwObject,                   0x534030);
+    RH_ScopedVMTInstall(ProcessControl,                   0x403E40);
+    RH_ScopedVMTInstall(ProcessCollision,                 0x403E50);
+    RH_ScopedVMTInstall(Render,                           0x534310);
+    RH_ScopedVMTInstall(SetupLighting,                    0x553DC0);
+    RH_ScopedVMTInstall(FlagToDestroyWhenNextProcessed,   0x403EB0);
+}
+```
+
+And from `source/game_sa/PathFind.cpp`, showing `{ .reversed = false }` in practice:
+
+```cpp
+void CPathFind::InjectHooks() {
+    RH_ScopedClass(CPathFind);
+    RH_ScopedCategoryGlobal();
+
+    RH_ScopedInstall(Shutdown,         0x450950);
+    RH_ScopedInstall(UpdateStreaming,  0x450A60);
+    // ComputeRoute is not yet reversed; GTA's version runs instead
+    RH_ScopedInstall(ComputeRoute,     0x452760, { .reversed = false });
+}
+```
+
+---
+
+## Category paths and `SetCategoryOrItemStateByPath`
+
+Every installed hook is stored in a hierarchical tree rooted at `"Root"`. The path is built as:
+
+```
+<category>/<ScopeName>/<FunctionName>
+```
+
+For example, `CPathFind::Shutdown` ends up at `"Global/CPathFind/Shutdown"`.
+
+The function `SetCategoryOrItemStateByPath` enables or disables an entire subtree or a single item:
+
+```cpp
+// Enable everything under "Global/CPathFind"
+ReversibleHooks::SetCategoryOrItemStateByPath("Global/CPathFind", true);
+
+// Disable only one function
+ReversibleHooks::SetCategoryOrItemStateByPath("Global/CPathFind/ComputeRoute", false);
+```
+
+Return values:
+
+| `SetCatOrItemStateResult` | Meaning |
+|---|---|
+| `Done` | State was changed successfully. |
+| `NotFound` | No hook or category matched the path. |
+| `Locked` | The item exists but is locked (`locked = true`) and cannot be toggled. |
+
+This is also what the command-line flags call into (`source/extensions/CommandLine.cpp`):
+
+| Flag | Effect |
+|---|---|
+| `--unhook-all` | Disable all hooks at startup |
+| `--unhook=<path>` | Disable specific hook(s) by path (comma-separated) |
+| `--unhook-except=<path>` | Disable all hooks then re-enable the specified ones |
+| `--debug` | Wait for a debugger to attach before game code runs |
+
+---
+
+## Runtime toggling via the F7 debug menu
+
+The in-game debug menu is an ImGui overlay in `source/toolsmenu/`. It is toggled with **F7** (or the equivalent gamepad shortcut):
+
+```cpp
+// source/toolsmenu/UIRenderer.cpp
+if (ImGui::IsKeyChordPressed(ImGuiKey_F7, ImGuiInputFlags_RouteAlways)
+    || CPad::GetPad()->IsFKeyJustDown(FKEY7))
+{
+    // show / hide the debug overlay
+}
+```
+
+Inside the overlay there is a hook browser that walks the category tree and renders a checkbox for each hook. Clicking a checkbox calls `ReversibleHooks::SwitchHook()`. Hooks with `locked = true` (i.e. not-yet-reversed functions) are greyed out and cannot be changed.
+
+<Note>
+Locking prevents accidentally running a half-finished implementation mid-game. Once a function is marked `reversed = true`, the lock is automatically lifted and the checkbox becomes interactive.
+</Note>

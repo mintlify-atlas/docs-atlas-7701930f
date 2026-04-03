@@ -1,0 +1,154 @@
+---
+title: "Animation system"
+description: "How GTA:SA's IFP-based skeletal animation system works — hierarchies, blend associations, sequences, and streaming."
+---
+
+## Overview
+
+GTA San Andreas animates peds and vehicles using a runtime blending system built around IFP (Internal Format Package) files. Each IFP contains one or more named animations, each of which drives a set of skeletal bones. The system supports simultaneous blending of a primary body animation with any number of partial animations (hand gestures, smoking, facial expressions) on the same character.
+
+The central manager is `CAnimManager`, which owns the global animation block table, the per-group association tables, and a LRU cache for uncompressed hierarchy data.
+
+## Key classes
+
+### CAnimBlendHierarchy
+
+The animation object. It is loaded from an IFP file and holds one `CAnimBlendSequence` per animated bone.
+
+```cpp
+class CAnimBlendHierarchy {
+    uint32              m_hashKey;       // Identifies the animation
+    CAnimBlendSequence* m_pSequences;   // Per-bone frame data
+    uint16              m_nSeqCount;    // Number of bones driven
+    bool                m_bIsCompressed;
+    bool                m_bKeepCompressed;
+    int32               m_nAnimBlockId; // Index into the block table
+    float               m_fTotalTime;   // Duration in seconds
+    CLink<CAnimBlendHierarchy*>* m_Link;
+};
+// Size: 0x18
+```
+
+A hierarchy is **never destroyed** at runtime. It stays in memory until `CStreaming` needs the space occupied by its IFP block, at which point `RemoveAnimBlock` unloads it. Calling `CAnimManager::UncompressAnimation(hier)` both decompresses the keyframe data (if not already done) and moves the hierarchy to the front of the LRU cache, marking it as recently used.
+
+### CAnimBlendSequence
+
+Represents the keyframe data for a single bone inside a `CAnimBlendHierarchy`. If an animation moves 15 bones, the hierarchy will contain 15 sequences. Each sequence stores translation/rotation keyframes as either compressed or uncompressed data.
+
+### CAnimBlendAssociation
+
+A running animation instance attached to an `RpClump` (typically a ped). Created from a `CAnimBlendHierarchy` when a clump requests playback; destroyed when the ped stops the animation.
+
+```cpp
+class CAnimBlendAssociation {
+    CAnimBlendLink   m_Link;         // Intrusive linked list node
+    uint16           m_NumBlendNodes;// Bones this instance drives
+    AssocGroupId     m_AnimGroupId;
+    CAnimBlendNode*  m_BlendNodes;   // Per-bone blend state
+    CAnimBlendHierarchy* m_BlendHier;// Source hierarchy
+    float            m_BlendAmount;  // Current blend weight [0, 1]
+    float            m_BlendDelta;   // Rate of change of BlendAmount
+    float            m_CurrentTime;  // Playback position in seconds
+    float            m_Speed;        // Playback rate multiplier
+    AnimationId      m_AnimId;
+    uint16           m_Flags;        // eAnimationFlags
+    // Callback pointers for finish / delete events
+};
+// Size: 0x3C
+```
+
+Key flags from `eAnimationFlags`:
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `ANIMATION_IS_PLAYING` | `0x01` | Animation is actively ticking |
+| `ANIMATION_IS_LOOPED` | `0x02` | Loops when it reaches the end |
+| `ANIMATION_IS_BLEND_AUTO_REMOVE` | `0x04` | Deleted automatically when faded out |
+| `ANIMATION_IS_FINISH_AUTO_REMOVE` | `0x08` | Deleted when the last frame is reached |
+| `ANIMATION_IS_PARTIAL` | `0x10` | Partial (secondary) animation |
+| `ANIMATION_CAN_EXTRACT_VELOCITY` | `0x40` | Root motion extraction enabled |
+| `ANIMATION_FACIAL` | `0x8000` | Facial animation — never auto-removed |
+
+### CAnimBlendStaticAssociation
+
+Stores static animation data loaded from an animation clump at startup. It holds the same per-bone node array as `CAnimBlendAssociation` but is never ticked or blended — it is the immutable source used to initialize runtime associations.
+
+### CAnimBlendAssocGroup
+
+Represents a named group (block) such as `"ped"` or `"int_house"`. Each group maps `AnimationId` values and animation name strings to their `CAnimBlendStaticAssociation` entries. Groups are registered through `AnimAssocDefinition` descriptors during `CAnimManager::ReadAnimAssociationDefinitions()`.
+
+## CAnimManager
+
+The static manager class orchestrates loading, streaming, and lookup:
+
+```cpp
+// Constants
+constexpr auto NUM_ANIM_ASSOC_GROUPS = 118; // Total animation groups
+constexpr auto NUM_ANIM_BLOCKS       = 180; // Max IFP blocks
+constexpr auto MAX_ANIM_BLOCK_NAME   = 16;
+
+// Global storage (static refs into game memory)
+std::array<CAnimBlendHierarchy, 2500> ms_aAnimations;  // All loaded hierarchies
+std::array<CAnimBlock, 180>           ms_aAnimBlocks;   // IFP block descriptors
+CAnimBlendAssocGroup*                 ms_aAnimAssocGroups;
+CLinkList<CAnimBlendHierarchy*>       ms_AnimCache;     // LRU cache
+```
+
+### Common operations
+
+```cpp
+// Look up a hierarchy by name within a block
+CAnimBlendHierarchy* hier = CAnimManager::GetAnimation("walk_player", block);
+
+// Start playing an animation on a ped clump (blending in over 8 frames)
+CAnimBlendAssociation* assoc = CAnimManager::BlendAnimation(
+    ped->m_pRwClump,
+    ANIM_GROUP_PED,
+    ANIM_ID_WALK,
+    8.f  // blend delta
+);
+
+// Create an association without attaching it to a clump
+CAnimBlendAssociation* assoc = CAnimManager::CreateAnimAssociation(
+    ANIM_GROUP_PED,
+    ANIM_ID_RUN
+);
+```
+
+## IFP streaming
+
+IFP files are loaded on-demand by `CStreaming`. When a ped model is loaded, its associated animation block is registered via `CAnimManager::AddAnimBlockRef`. When the block's reference count drops to zero, `CAnimManager::RemoveAnimBlock` unloads it, freeing both the `CAnimBlendHierarchy` keyframe data and the `CAnimBlendSequence` arrays.
+
+Compressed animation data is kept compressed in memory until needed (controlled by `m_bKeepCompressed`). The `UncompressAnimation` function decompresses on first use and registers the hierarchy in the LRU cache. When memory pressure is high, `CStreaming` can evict the least-recently-used uncompressed data by calling `RemoveUncompressedData`.
+
+<Steps>
+  <Step title="Register block">
+    `CAnimManager::RegisterAnimBlock(name)` records the IFP block in `ms_aAnimBlocks` and returns its index.
+  </Step>
+  <Step title="Stream load">
+    `CStreaming` reads the IFP from disk into the loading buffer and calls `CAnimManager::LoadAnimFile(stream, compress)`.
+  </Step>
+  <Step title="Parse ANPK / ANP3 sections">
+    `LoadAnimFile_ANPK` or `LoadAnimFile_ANP23` iterates every animation header in the file, allocates a `CAnimBlendHierarchy`, sets its name hash, and populates `CAnimBlendSequence` arrays.
+  </Step>
+  <Step title="Build association groups">
+    `CreateAnimAssocGroups` iterates the `AnimAssocDefinition` table and connects hierarchies to their `CAnimBlendAssocGroup` entries so lookups by `AnimationId` are O(1).
+  </Step>
+</Steps>
+
+## Partial animations
+
+A clump can simultaneously play any number of animations by having multiple `CAnimBlendAssociation` objects in its linked list. The blend nodes for each bone are resolved independently, so a partial animation marked `ANIMATION_IS_PARTIAL` only overrides the specific bones it has sequences for (e.g., right arm for a hand gesture) while the primary walk/run cycle continues on all other bones.
+
+```
+Ped clump → CAnimBlendLink list:
+  [0] walk_player   (ANIMATION_IS_PLAYING | ANIMATION_IS_LOOPED)
+  [1] smoke_idle    (ANIMATION_IS_PARTIAL | ANIMATION_IS_LOOPED)
+  [2] wave_right    (ANIMATION_IS_PARTIAL | ANIMATION_IS_FINISH_AUTO_REMOVE)
+```
+
+Secondary task animations (flag `ANIMATION_SECONDARY_TASK_ANIM`) and facial animations (flag `ANIMATION_FACIAL`) follow the same mechanism. Facial animations are special in that they are **never** auto-removed regardless of other flags, ensuring face expressions are not accidentally cleared.
+
+<Note>
+  `CAnimBlendHierarchy` instances are shared across all clumps playing the same animation. Only `CAnimBlendAssociation` (the per-clump instance) is allocated per playback.
+</Note>

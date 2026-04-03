@@ -1,0 +1,191 @@
+---
+title: "Entity hierarchy"
+description: "The class hierarchy rooted at CPlaceable that covers every object in the GTA San Andreas world."
+---
+
+Every object that exists in the GTA San Andreas world—buildings, cars, peds, mission objects—ultimately derives from `CPlaceable`. The hierarchy splits at `CEntity` into physical (simulated) and static (immovable) branches.
+
+## Class hierarchy
+
+```
+CPlaceable
+└── CEntity                  (source/game_sa/Entity/Entity.h)
+    ├── CBuilding            (static world geometry)
+    │   └── CAnimatedBuilding
+    ├── CDummy               (invisible anchor / reference point)
+    │   └── CDummyObject
+    └── CPhysical            (source/game_sa/Entity/Physical.h)
+        ├── CObject          (interactive world objects)
+        ├── CPed             (source/game_sa/Entity/Ped/Ped.h)
+        │   ├── CPlayerPed
+        │   ├── CCivilianPed
+        │   ├── CCopPed
+        │   └── CEmergencyPed
+        └── CVehicle         (source/game_sa/Entity/Vehicle/Vehicle.h)
+            ├── CAutomobile
+            ├── CBike
+            ├── CBmx
+            ├── CBoat
+            ├── CHeli
+            ├── CPlane
+            ├── CTrain
+            ├── CQuadBike
+            ├── CMonsterTruck
+            └── CTrailer
+```
+
+---
+
+## `CEntity`
+
+Defined in `source/game_sa/Entity/Entity.h`. Size: `0x38` bytes.
+
+`CEntity` is the base for everything that has a position in the world. It holds the RenderWare object pointer, the entity type/status packed bitfield, a 32-bit flags word, a model index, and LOD linkage.
+
+### Entity type system
+
+The type is stored in a 3-bit field inside `CEntityInfo`:
+
+```cpp
+struct CEntityInfo {
+    eEntityType   m_nType   : 3; // ENTITY_TYPE_BUILDING, _VEHICLE, _PED, _OBJECT, _DUMMY
+    eEntityStatus m_nStatus : 5; // STATUS_PLAYER, STATUS_SIMPLE, STATUS_PHYSICS, etc.
+};
+```
+
+Convenience accessors are provided for both reading and writing:
+
+```cpp
+void SetType(eEntityType type)           { m_info.m_nType = type; }
+auto GetType() const noexcept            { return m_info.m_nType; }
+
+bool GetIsTypeBuilding() const  { return GetType() == ENTITY_TYPE_BUILDING; }
+bool GetIsTypeVehicle()  const  { return GetType() == ENTITY_TYPE_VEHICLE;  }
+bool GetIsTypePed()      const  { return GetType() == ENTITY_TYPE_PED;      }
+bool GetIsTypeObject()   const  { return GetType() == ENTITY_TYPE_OBJECT;   }
+bool GetIsTypeDummy()    const  { return GetType() == ENTITY_TYPE_DUMMY;    }
+bool GetIsTypePhysical() const  { /* type > BUILDING && type < DUMMY */     }
+```
+
+### Entity flags
+
+`CEntity` has a 32-bit flags word exposed both as a union of named bitfields and as a raw `uint32 m_nFlags`. The named fields cover visibility, streaming, collision, rendering, and LOD behaviour:
+
+```cpp
+// source/game_sa/Entity/Entity.h (selected flags)
+bool m_bUsesCollision          : 1; // entity participates in collision
+bool m_bIsStatic               : 1; // static; no physics simulation
+bool m_bIsVisible              : 1; // rendered this frame
+bool m_bIsBIGBuilding          : 1; // large building; streamed differently
+bool m_bStreamingDontDelete    : 1; // streaming must not remove this entity
+bool m_bDontStream             : 1; // never streamed in/out
+bool m_bUnderwater             : 1; // draw order adjusted for underwater
+bool m_bHasPreRenderEffects    : 1; // attached pre-render callbacks
+bool m_bIsProcObject           : 1; // placed by procedural object generator
+```
+
+---
+
+## `CPhysical`
+
+Defined in `source/game_sa/Entity/Physical.h`. Size: `0x138` bytes.
+
+`CPhysical` extends `CEntity` with a full rigid-body simulation: linear and angular velocity, mass, friction, buoyancy, air resistance, elasticity, and collision response. It also manages shadow data and attachment to other entities.
+
+### Key members
+
+```cpp
+// source/game_sa/Entity/Physical.h (selected fields)
+uint32  m_nPhysicalFlags;          // bApplyGravity, bBulletProof, bInvulnerable, …
+CVector m_vecMoveSpeed;            // linear velocity (world units/frame)
+CVector m_vecTurnSpeed;            // angular velocity
+CVector m_vecFrictionMoveSpeed;    // linear friction contribution
+CVector m_vecForce;                // accumulated forces this frame
+CVector m_vecTorque;               // accumulated torques this frame
+float   m_fMass;                   // mass in kg
+float   m_fTurnMass;               // rotational inertia
+float   m_fAirResistance;
+float   m_fElasticity;
+float   m_fBuoyancyConstant;
+CVector m_vecCentreOfMass;
+float   m_fMovingSpeed;            // scalar speed (used by script IDs)
+float   m_fDamageIntensity;
+CEntity* m_pDamageEntity;          // entity that last damaged this
+CPhysical* m_pAttachedTo;          // entity this is attached to (e.g. trailer)
+```
+
+### Physical flags (selected)
+
+```cpp
+uint32 bApplyGravity        : 1; // pulled downward each frame
+uint32 bBulletProof         : 1;
+uint32 bFireProof           : 1;
+uint32 bCollisionProof      : 1;
+uint32 bMeleeProof          : 1;
+uint32 bInvulnerable        : 1; // immune to all damage
+uint32 bExplosionProof      : 1;
+uint32 bSubmergedInWater    : 1;
+uint32 bOnSolidSurface      : 1;
+uint32 bAttachedToEntity    : 1; // locked to m_pAttachedTo
+uint32 bTouchingWater       : 1;
+```
+
+---
+
+## `CPed`
+
+Defined in `source/game_sa/Entity/Ped/Ped.h`. Extends `CPhysical`.
+
+`CPed` is the base class for all pedestrian-type entities. It adds audio entities (speech, footsteps, weapon sounds), a `CPedIntelligence` AI controller, an `IK` chain manager, 13 weapon slots, and a comprehensive flags word:
+
+```cpp
+// source/game_sa/Entity/Ped/Ped.h (selected)
+CAEPedAudioEntity       m_pedAudio;
+CAEPedSpeechAudioEntity m_pedSpeech;
+CAEPedWeaponAudioEntity m_weaponAudio;
+CPedIntelligence*       m_pIntelligence;
+CWeapon                 m_weapons[13];
+ePedType                m_nPedType;    // PEDTYPE_PLAYER1, PEDTYPE_COP, PEDTYPE_GANG1, …
+ePedState               m_nPedState;   // PED_IDLE, PED_ATTACK, PED_DIE, …
+eMoveState              m_nMoveState;  // PEDMOVE_STILL, PEDMOVE_WALK, PEDMOVE_RUN, …
+```
+
+### Ped subclasses
+
+| Class | Purpose |
+|---|---|
+| `CPlayerPed` | The player character. Adds `CPlayerPedData` for stats, cash, wanted state. |
+| `CCivilianPed` | Generic civilian. No unique data beyond `CPed`. |
+| `CCopPed` | Police officer. Handles arrest behaviour. |
+| `CEmergencyPed` | Paramedics, firefighters. |
+
+---
+
+## NOTSA helper utilities on `CEntity`
+
+<Note>
+Functions and templates marked with `// NOTSA section` in the headers are additions made by the project—they do not exist in the original GTA SA binary. They provide safer or more idiomatic C++ patterns on top of the reversed interface.
+</Note>
+
+Key NOTSA helpers on `CEntity`:
+
+```cpp
+// Safe entity reference management
+template<typename T>
+static void ClearReference(T*& ref);            // CleanUpOldReference + nullptr
+
+template<typename T, typename Y>
+static void ChangeEntityReference(T*& inOutRef, Y* entity); // clear old, register new
+
+// Type-safe downcasts (no dynamic_cast overhead; trust the type field)
+auto AsVehicle()    { return reinterpret_cast<CVehicle*>(this); }
+auto AsPed()        { return reinterpret_cast<CPed*>(this); }
+auto AsAutomobile() { return reinterpret_cast<CAutomobile*>(this); }
+auto AsBuilding()   { return reinterpret_cast<CBuilding*>(this); }
+
+// Convenience
+auto GetModelId() const { return (eModelID)m_nModelIndex; } // typed model ID
+CEntity* FindLastLOD() noexcept;                            // walks LOD chain
+```
+
+Always check `GetType()` or one of the `GetIsType*()` predicates before casting.

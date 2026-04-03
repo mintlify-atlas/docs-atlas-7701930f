@@ -1,0 +1,131 @@
+---
+title: "Audio system"
+description: "Architecture of GTA:SA's audio subsystem as reversed in gta-reversed — sound management, audio entities, and the OpenAL backend."
+---
+
+## Overview
+
+GTA San Andreas uses a layered audio architecture that separates the management of sounds from the entities that produce them. In gta-reversed this entire system has been reversed and reimplemented as a DLL that hooks into the game's original binary. All audio coordination flows through a single top-level manager, `CAudioEngine`, which owns or references every specialised audio entity.
+
+GTA:SA's original audio backend is DirectSound. gta-reversed supports two audio backends selectable at compile time via CMake options:
+
+- **DirectSound** (`USE_DSOUND`) — default on Windows; uses the original game's DirectSound path.
+- **OpenAL** (`USE_OPENAL`) — an alternative backend using `OALSource` / `OALBuffer` wrappers in `Audio/OpenAL/`. Enable with `GTASA_WITH_OPENAL=ON`.
+
+Streaming audio is decoded from Ogg/Vorbis files using the **ogg** and **vorbis** Conan packages (`ogg/1.3.5`, `vorbis/1.3.7`). JPEG thumbnail images for the radio station UI use **libjpeg-turbo** (`libjpeg-turbo/3.1.0`).
+
+## Core classes
+
+<CardGroup cols={2}>
+  <Card title="CAudioEngine" icon="sliders">
+    The top-level audio manager (`AudioEngine.h`). Owns the frontend, script, collision, pedless-speech, and door audio entities. Exposes methods for controlling the radio (`StartRadio`, `RetuneRadio`, `StopRadio`), cutscene and beat tracks, mission audio slots, police scanner, and the global volume faders. The global singleton is `AudioEngine`.
+  </Card>
+  <Card title="CAESound" icon="volume-high">
+    An individual sound instance (`AESound.h`). Holds the bank slot, sound ID, owning `CAEAudioEntity`, position (current and previous), volume, roll-off factor, speed, doppler coefficient, and a 13-bit `eSoundEnvironment` flags field. Up to **300 virtual sound slots** exist simultaneously; only the highest-priority 64 are mapped to physical OpenAL channels.
+  </Card>
+  <Card title="CAESoundManager" icon="bars-staggered">
+    Manages all `CAESound` instances and the physical/virtual channel mapping (`managers/AESoundManager.h`). Tracks up to `MAX_NUM_SOUNDS = 300` virtual sounds and `MAX_NUM_AUDIO_CHANNELS = 64` physical channels. Exposes `PlaySound(tSoundPlayParams)` as the primary entry point for playing a new sound.
+  </Card>
+  <Card title="CAEAmbienceTrackManager" icon="wind">
+    Handles ambient streamed tracks that can override the radio (`managers/AEAmbienceTrackManager.h`). Maintains an `AmbienceStatus` state machine (`STARTING → WAITING_TO_PLAY → PLAYING → STOPPING → STOPPED`) and supports special mission ambience tracks triggered by audio events.
+  </Card>
+</CardGroup>
+
+## Audio entities
+
+Each in-game object category that produces audio has a dedicated entity class that inherits from `CAEAudioEntity` (`entities/AEAudioEntity.h`). These are stored by value inside `CAudioEngine` or allocated separately.
+
+| Entity class | Source file | Responsibility |
+|---|---|---|
+| `CAEFrontendAudioEntity` | `AEFrontendAudioEntity.h` | UI / frontend sounds |
+| `CAEScriptAudioEntity` | `AEScriptAudioEntity.h` | Script-driven one-shot and looping sounds |
+| `CAECollisionAudioEntity` | `AECollisionAudioEntity.h` | Surface collision sounds with a lookup table |
+| `CAEGlobalWeaponAudioEntity` | `AEGlobalWeaponAudioEntity.h` | Weapon fire, reload, and impact events |
+| `CAEPedlessSpeechAudioEntity` | `AEPedlessSpeechAudioEntity.h` | Disembodied speech attached to world entities |
+| `CAEPedAudioEntity` | `AEPedAudioEntity.h` | Per-ped footsteps, clothing, and effort sounds |
+| `CAEPedSpeechAudioEntity` | `AEPedSpeechAudioEntity.h` | Ped voice lines and speech walla |
+| `CAEPedWeaponAudioEntity` | `AEPedWeaponAudioEntity.h` | Weapon sounds owned by individual peds |
+| `CAEVehicleAudioEntity` | `AEVehicleAudioEntity.h` | Engine, exhaust, tyre screech, bicycle, and aircraft sounds |
+| `CAEExplosionAudioEntity` | `AEExplosionAudioEntity.h` | Explosion blasts |
+| `CAEFireAudioEntity` | `AEFireAudioEntity.h` | Fire and flame crackle |
+| `CAEWeatherAudioEntity` | `AEWeatherAudioEntity.h` | Rain, wind, and environment weather |
+| `CAEDoorAudioEntity` | `AEDoorAudioEntity.h` | Door creak and slam events |
+| `CAEWaterCannonAudioEntity` | `AEWaterCannonAudioEntity.h` | Water cannon stream sounds |
+| `CAEPoliceScannerAudioEntity` | `AEPoliceScannerAudioEntity.h` | Police dispatch scanner overlay |
+| `CAETwinLoopSoundEntity` | `AETwinLoopSoundEntity.h` | Cross-fading twin-loop ambient effects |
+
+## OpenAL backend
+
+The hardware abstraction layer (`Audio/hardware/`) presents a channel-based API to `CAESoundManager`. Underneath, each channel is backed by an `OALSource` object:
+
+```cpp
+class OALSource final : public OALBase {
+    ALuint      m_sourceId{};         // OpenAL source handle
+    OALSourceType m_type;             // Static, Preloop, or Streaming
+    OALBuffer*  m_oalBuffer{};        // Currently attached buffer
+    float       m_currentVolume{1.f};
+    // ...
+};
+```
+
+Streaming channels decode Ogg/Vorbis data on a dedicated `AEStreamThread` and queue `OALBuffer` objects onto `OALSource`. Non-streaming (static) sounds are loaded into a single `OALBuffer` directly from the game's SFX bank files.
+
+## Playing a sound
+
+```cpp
+// Request a new sound from the manager
+CAESound* sound = AESoundManager.PlaySound({
+    .BankSlotID    = SND_BANK_SLOT_GENRL,
+    .SoundID       = SOUND_BICYCLE_BELL,
+    .AudioEntity   = myEntity,
+    .Pos           = GetPosition(),
+    .Volume        = -10.f,
+    .Speed         = 1.f,
+    .Flags         = SOUND_IS_PAUSABLE | SOUND_PLAY_PHYSICALLY,
+});
+```
+
+`CAESoundManager::Service()` is called once per frame. It computes `ListenerVolume` and `ListenerSpeed` for every virtual sound and selects which 64 are mapped to physical OpenAL channels based on priority (volume at the listener + uncancellability flags).
+
+## Radio and streaming managers
+
+<CardGroup cols={2}>
+  <Card title="CAERadioTrackManager" icon="radio">
+    Controls the in-vehicle radio: station selection, retune animations, bass enhancement, and listen-time statistics. Feeds decoded audio into the hardware streaming channel.
+  </Card>
+  <Card title="CAECutsceneTrackManager" icon="film">
+    Preloads and plays synchronised cutscene music tracks, with status polling (`GetCutsceneTrackStatus`) used by script to time cinematic audio.
+  </Card>
+  <Card title="CAEAmbienceTrackManager" icon="cloud">
+    Handles ambient mission music that overrides the radio station during scripted sequences.
+  </Card>
+  <Card title="CAEUserRadioTrackManager" icon="music">
+    Streams custom MP3/Ogg tracks placed in the game's user radio folder (Playback uses the same Ogg/Vorbis pipeline).
+  </Card>
+</CardGroup>
+
+## Known bug fixes
+
+Two audio-related reversible bug fixes are active when the `FIX_BUGS` flag is set:
+
+<AccordionGroup>
+  <Accordion title="AESound_UpdatePlayTime_DivisionByZero">
+    **Credit:** Pirulax
+
+    `CAESound::UpdatePlayTime` computed a ratio using the sound length as a divisor without guarding against a zero-length sound. When a sound with `m_Length == 0` was updated this caused a division-by-zero. The fix adds a guard so the update is skipped when the length has not yet been set.
+  </Accordion>
+  <Accordion title="CAEVehicleAudioEntity_PlayBicycleSound_VolumeFix">
+    **Credit:** Pirulax
+
+    The original `CAEVehicleAudioEntity::PlayBicycleSound` computed the final sound volume without adding the audio event's base volume, resulting in bicycle sounds always playing quieter than intended. The fix incorporates the event base volume into the volume calculation, matching the pattern used by all other vehicle sound emitters.
+  </Accordion>
+  <Accordion title="CAEVehicleAudioEntity_PlayAircraftSound_VolumeFix">
+    **Credit:** Pirulax
+
+    The same event base volume omission affected aircraft engine sounds. The fix mirrors the bicycle fix and ensures aircraft sounds respect the event volume configured in the audio data tables.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Bug fixes are conditional on the `FIX_BUGS` preprocessor define and the `notsa::IsFixBugs()` runtime helper. See the [Reversible bug fixes](/systems/bug-fixes) page for the full mechanism.
+</Note>

@@ -1,0 +1,90 @@
+---
+title: "Game setup"
+description: "Configure your GTA San Andreas installation to load the reversed DLL."
+---
+
+Before you can run the project, you need a compatible GTA:SA executable, an ASI loader, and the built DLL in the right location.
+
+<Warning>
+  You must use the GTA:SA **Compact exe**. The commonly distributed **1.0 US exe** is not compatible and will cause random crashes. Verify your executable size before proceeding.
+</Warning>
+
+## Steps
+
+<Steps>
+  <Step title="Verify your GTA:SA executable">
+    The Compact exe is exactly **5,189,632 bytes** (4.94 MiB). Check the file size of `gta_sa.exe` in your GTA:SA installation directory.
+
+    On Windows, right-click `gta_sa.exe` → **Properties** → **General** tab. The **Size** field must read **4.94 MB** and **Size on disk** will differ — confirm the exact byte count shown in parentheses is `5,189,632 bytes`.
+
+    If your executable is a different size (the 1.0 US exe is 14,383,616 bytes), you need to obtain the Compact exe before continuing.
+  </Step>
+
+  <Step title="Install the ASI loader and Mouse Fix">
+    The project requires [Silent's ASI Loader](https://gtaforums.com/topic/523982-relopensrc-silents-asi-loader/) and a Mouse Fix (`dinput8.dll`). Both are bundled in `contrib/plugins.zip`.
+
+    **Option A — automated (recommended):** Run `contrib/install.py` with administrator privileges from the repository root. Administrator rights are required to create symlinks on Windows.
+
+    ```bash
+    python contrib/install.py
+    ```
+
+    The script will:
+    1. Open a file picker — select your `gta_sa.exe`
+    2. Extract `contrib/plugins.zip` into the GTA:SA installation directory
+    3. Create symlinks from `scripts/gta_reversed.asi` and `scripts/gta_reversed.pdb` to your chosen build configuration (`debug` or `release`)
+    4. Set the `GTA_SA_EXE` and `GTA_SA_DIR` environment variables for the debugger
+
+    **Option B — manual:** Copy the following files from `contrib/plugins.zip` into your GTA:SA installation directory root:
+    - `dinput8.dll` (Mouse Fix, also acts as the ASI loader proxy)
+    - Any additional files extracted from the zip
+
+    Then proceed to the next step to place the `.asi` file manually.
+  </Step>
+
+  <Step title="Place the built ASI file">
+    If you used `contrib/install.py`, this step is done automatically via symlinks — skip ahead to launching the game.
+
+    If you installed manually, copy the built output file into the `scripts/` subfolder of your GTA:SA installation:
+
+    ```
+    <GTA:SA installation>/
+    └── scripts/
+        └── gta_reversed.asi      ← copy here
+    ```
+
+    The `scripts/` folder may not exist yet — create it if needed.
+
+    <Note>
+      The symlink approach used by `contrib/install.py` means you never need to copy the file again after rebuilding. The game always loads the latest build automatically.
+    </Note>
+  </Step>
+
+  <Step title="Launch the game">
+    Start `gta_sa.exe` normally. The ASI loader will detect and inject `gta_reversed.asi` from the `scripts/` folder before the game initialises RenderWare.
+
+    A console window will appear alongside the game window — this is normal. It shows log output from spdlog and can be used to monitor hook activity and debug messages.
+  </Step>
+</Steps>
+
+## Other plugins
+
+<Warning>
+  Using plugins other than the ones tested by the project team is strongly discouraged. No support is provided for issues caused by third-party plugin conflicts.
+</Warning>
+
+The project is tested with the ASI loader and Mouse Fix from `contrib/plugins.zip` only. Adding other ASI plugins, ENB series, or mod loaders may interfere with the reversed hooks.
+
+## Debugging
+
+<Tip>
+  Install the [ReAttach plugin for Visual Studio](https://marketplace.visualstudio.com/items?itemName=ErlandR.ReAttach) to quickly reattach the debugger to the game process after each restart. This significantly speeds up the debug cycle when iterating on hook implementations.
+</Tip>
+
+To attach a debugger to a running game session:
+
+1. Launch the game with the DLL loaded.
+2. In Visual Studio, use **Debug** → **Attach to Process** and select `gta_sa.exe`.
+3. With ReAttach installed, use the toolbar button to reattach with one click on subsequent launches.
+
+If you need the game to wait for a debugger before executing any game code, pass `--debug` on the command line when launching `gta_sa.exe`. The process will print `Debugger not present` repeatedly until you attach.

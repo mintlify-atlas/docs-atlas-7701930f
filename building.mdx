@@ -1,0 +1,148 @@
+---
+title: "Building from source"
+description: "Set up your build environment and compile the gta_reversed.asi DLL from source."
+---
+
+## Prerequisites
+
+Install the following tools before proceeding:
+
+| Tool | Version | Notes |
+|------|---------|-------|
+| [Visual Studio](https://visualstudio.microsoft.com/downloads/) | 2026 (2022 works) | Requires the **Desktop development with C++** workload |
+| [Python](https://www.python.org/downloads/) | >= 3.x | Tick **Add Python to PATH** during installation |
+| [Conan](https://docs.conan.io/2/installation.html) | >= 2.x | Installed via pip after Python |
+| [CMake](https://cmake.org/download/) | >= 4.20 | Can be installed via Visual Studio installer |
+
+<Note>
+  Visual Studio 2022 still works. If you are using it, open `conanprofile.txt` and change `compiler.version` from `195` to `194` before running the setup script.
+</Note>
+
+## Build steps
+
+<Steps>
+  <Step title="Install Python and Conan">
+    Install [Python](https://www.python.org/downloads/). When prompted by the installer, tick the **Add Python to PATH** checkbox.
+
+    Then install Conan. If you just installed Python, open a new terminal first so the `PATH` change takes effect:
+
+    ```bash
+    pip install conan
+    ```
+
+    If this is the first time you've installed Conan on this machine, generate a default compiler profile:
+
+    ```bash
+    conan profile detect
+    ```
+  </Step>
+
+  <Step title="Run the setup script">
+    From the repository root, run:
+
+    ```bash
+    python setup.py
+    ```
+
+    This does two things in sequence:
+    1. Runs `conan install` to download and build all dependencies (nlohmann_json, spdlog, ImGui, SDL3, etc.)
+    2. Runs `cmake --preset default-unity` to configure the build tree in `build/`
+
+    **Options:**
+
+    | Flag | Description |
+    |------|-------------|
+    | `--buildconf Debug` | Build configuration (default: `Debug`) |
+    | `--buildconf Release` | Optimized build with no debug info |
+    | `--buildconf RelWithDebInfo` | Optimized build with debug symbols |
+    | `--no-unity-build` | Disable unity builds (slower compile, easier to diagnose include errors) |
+
+    <CodeGroup>
+
+    ```bash Debug (default)
+    python setup.py
+    ```
+
+    ```bash Release
+    python setup.py --buildconf Release
+    ```
+
+    ```bash RelWithDebInfo
+    python setup.py --buildconf RelWithDebInfo
+    ```
+
+    ```bash Without unity build
+    python setup.py --no-unity-build
+    ```
+
+    </CodeGroup>
+
+    The script invokes Conan and CMake directly. Here is what it runs internally:
+
+    ```bash
+    conan install . --build missing -s build_type="Debug" --profile ./conanprofile.txt
+    cmake --preset default-unity .
+    ```
+  </Step>
+
+  <Step title="Build the DLL">
+    Open the generated solution in Visual Studio:
+
+    ```
+    build/GTASA.sln
+    ```
+
+    Then build with **Ctrl+Shift+B**, or build from the command line:
+
+    ```bash
+    cmake --build build
+    ```
+
+    The output file is placed in `bin/Debug/gta_reversed.asi` (or `bin/Release/` for Release builds).
+  </Step>
+</Steps>
+
+## Dependency overview
+
+Dependencies are managed by Conan and downloaded automatically on first build. The project uses:
+
+| Package | Purpose |
+|---------|---------|
+| `imgui/1.91.5-docking` | In-game debug overlay |
+| `sdl/3.2.6` | Input and audio backend |
+| `spdlog/1.15.0` | Structured logging |
+| `nlohmann_json/3.11.3` | JSON configuration |
+| `tracy/cci.20220130` | Frame profiler |
+| `ogg/1.3.5` + `vorbis/1.3.7` | Ogg Vorbis audio decoding |
+| `libjpeg-turbo/3.1.0` | JPEG texture support |
+
+## Conan profile
+
+The file `conanprofile.txt` at the repository root controls the compiler and architecture settings passed to Conan:
+
+```ini
+[settings]
+arch=x86
+build_type=Debug
+compiler=msvc
+compiler.cppstd=23
+compiler.runtime=static
+compiler.version=195
+os=Windows
+
+[replace_tool_requires]
+cmake/*: cmake/4.2.0
+```
+
+`compiler.version=195` corresponds to Visual Studio 2026. Change it to `194` for Visual Studio 2022.
+
+## CMake presets
+
+The project ships two CMake presets, both of which inherit from the Conan-generated `ConanPresets.json`:
+
+| Preset | Unity build | Use case |
+|--------|------------|---------|
+| `default-unity` | Enabled | Faster incremental builds (default) |
+| `default` | Disabled | Easier include error diagnosis |
+
+The preset is selected automatically by `setup.py` based on whether `--no-unity-build` is passed.

@@ -1,0 +1,170 @@
+---
+title: "Reversal progress"
+description: "Current status of class and function reversal across the GTA:SA codebase."
+---
+
+GTA:SA Reversed tracks reversal progress at the class level. Each class is in one of three states: fully reversed, partially reversed, or not started.
+
+<Note>
+  The progress data in `docs/ReversedClasses.md` is auto-generated and may not reflect the very latest commits. Check the repository directly for the most current state.
+</Note>
+
+## Current stats
+
+As of February 2026:
+
+<CardGroup cols={3}>
+  <Card title="7,965" icon="function">
+    Total functions tracked
+  </Card>
+  <Card title="700" icon="grid">
+    Total classes
+  </Card>
+  <Card title="79%" icon="chart-bar">
+    Fully reversed (556/700 classes)
+  </Card>
+</CardGroup>
+
+## Completion tiers
+
+| Tier | Count | Description |
+|---|---|---|
+| Fully reversed | 556 / 700 (79%) | Every function in the class has been reversed and the hook is active. |
+| Partially reversed | 135 / 700 (19%) | Some functions are reversed; others are stubs or still call the original. |
+| Not started | 9 / 700 (1%) | No functions in the class have been reversed yet. |
+
+## Notable fully-reversed classes
+
+The following classes are complete and serve as good reference examples when learning how to reverse:
+
+<AccordionGroup>
+  <Accordion title="Gameplay and world systems">
+    | Class | Functions |
+    |---|---|
+    | `CWorld` | 92 (99% — the 1 remaining function is a partial stub) |
+    | `CStreaming` | 94 |
+    | `CRadar` | 63 |
+    | `CPad` | 75 |
+    | `CCheat` | 72 |
+    | `CRenderer` | 33 |
+    | `CTimer` | 13 |
+    | `CClock` | 9 |
+    | `CGameLogic` | 27 |
+    | `CWanted` | 33 |
+    | `CGarages` | 21 |
+    | `CGlass` | 19 |
+    | `CDarkel` | 19 |
+  </Accordion>
+
+  <Accordion title="Entities and physics">
+    | Class | Functions |
+    |---|---|
+    | `CEntity` | 70 |
+    | `CObject` | 48 |
+    | `CPlaceable` | 16 |
+    | `CDamageManager` | 27 |
+    | `CVisibilityPlugins` | 84 |
+    | `CColStore` | 23 |
+    | `CColModel` | 9 |
+  </Accordion>
+
+  <Accordion title="Peds and AI">
+    | Class | Functions |
+    |---|---|
+    | `CPedIntelligence` | 52 |
+    | `CPedGroupIntelligence` | 26 |
+    | `CPedGroupMembership` | 18 |
+    | `CPedIK` | 9 |
+    | `CPedAttractorManager` | 14 |
+    | `CPedStats` | 4 |
+    | `CEventHandler` | 69 (96% partial) |
+    | `CEventDamage` | 20 |
+    | `CEventGunShot` | 5 |
+  </Accordion>
+
+  <Accordion title="Weapons">
+    | Class | Functions |
+    |---|---|
+    | `CWeaponInfo` | 10 |
+    | `CWeapon` | 35 (85% — some complex firing functions remain) |
+    | `CBulletInfo` | 4 |
+    | `CBulletTraces` | 5 |
+  </Accordion>
+
+  <Accordion title="Audio">
+    | Class | Functions |
+    |---|---|
+    | `CAudioEngine` | 82 |
+    | `CAEPedSpeechAudioEntity` | 58 |
+    | `CAEVehicleAudioEntity` | 102 (96% partial) |
+    | `CAESoundManager` | 14 |
+    | `CAEWeaponAudioEntity` | 20 |
+    | `CAECollisionAudioEntity` | 17 |
+    | `CAEDataStream` | 20 |
+    | `CAESound` | 18 |
+  </Accordion>
+
+  <Accordion title="Streaming and loading">
+    | Class | Functions |
+    |---|---|
+    | `CFileLoader` | 47 |
+    | `CFileMgr` | 17 |
+    | `CTxdStore` | 26 |
+    | `CDirectory` | 10 |
+    | `CStreamingInfo` | 7 |
+    | `CIplStore` | 33 (97% partial) |
+  </Accordion>
+
+  <Accordion title="Vehicles">
+    | Class | Functions |
+    |---|---|
+    | `CVehicle` | 137 (97% partial) |
+    | `CAutomobile` | 97 (98% partial) |
+    | `CVehicleModelInfo` | 75 |
+    | `CVehicleRecording` | 29 |
+    | `CVehicleAnimGroup` | 5 |
+    | `CBoat` | 23 |
+    | `CHeli` | 11 |
+    | `CTrailer` | 13 |
+    | `cHandlingDataMgr` | 11 |
+  </Accordion>
+
+  <Accordion title="Cutscenes, UI, and misc">
+    | Class | Functions |
+    |---|---|
+    | `CCutsceneMgr` | 35 |
+    | `CReplay` | 47 |
+    | `CStats` | 33 |
+    | `CShopping` | 30 |
+    | `CMessages` | 28 |
+    | `CControllerConfigManager` | 58 |
+    | `CLocalisation` | 18 |
+    | `CFireManager` | 24 |
+    | `CExplosion` | 12 |
+    | `CTagManager` | 19 |
+  </Accordion>
+</AccordionGroup>
+
+## What to work on next
+
+The [GitHub discussions post](https://github.com/gta-reversed/gta-reversed/discussions/402) maintains a list of suggested areas to focus on. It is updated as priorities change.
+
+Classes worth tackling right now include:
+
+- **Not-started classes** — `CRoadBlocks`, `CLoadMonitor`, `Interior_c`, `C_PcSave` — these are the lowest-hanging fruit.
+- **Partially-reversed classes close to completion** — `CMenuManager` (98%), `CAutomobile` (98%), `CPed` (94%), `CPathFind` (96%).
+- **High-function-count partials** — `CCamera` (91/110), `CBike` (21/40), `CTrain` (20/40) — completing these would add many functions at once.
+
+## Updating the progress tracker
+
+`docs/ReversedClasses.md` is auto-generated. To regenerate it after reversing functions, run the generation script from the project root. Do not edit the file by hand.
+
+When you reverse a function, set `reversed: true` on its `RH_ScopedInstall` call (or omit the options struct entirely, since `true` is the default). The progress tracker reads this metadata to compute completion percentages.
+
+```cpp
+// Stub — not counted as reversed
+RH_ScopedInstall(FireInstantHit, 0x73FB10, { .reversed = false });
+
+// Complete — counted as reversed
+RH_ScopedInstall(FireInstantHit, 0x73FB10);
+```

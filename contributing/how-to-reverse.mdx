@@ -1,0 +1,166 @@
+---
+title: "How to reverse a function"
+description: "Step-by-step guide to reversing a GTA:SA function and registering it with the hook system."
+---
+
+Reversing a function means writing a C++ implementation that matches the original game's behavior exactly, then registering it so the DLL replaces the original at runtime. This page walks through the full process.
+
+## Before you start
+
+You will need:
+
+- A disassembler: [IDA Pro](https://hex-rays.com/ida-pro/) or [Ghidra](https://ghidra-sre.org/) (free).
+- The GTA:SA Compact exe (exactly `5,189,632 bytes`).
+- The [plugin-sdk](https://github.com/DK22Pac/plugin-sdk) project as a reference for addresses and existing class definitions.
+- The [gtaforums.com memory address documentation](https://gtaforums.com/topic/194199-documenting-gta-sa-memory-addresses) for known addresses.
+
+<Tip>
+  The plugin-sdk project has already documented most function addresses and signatures. Check it before spending time in a disassembler.
+</Tip>
+
+## The reversal process
+
+<Steps>
+  <Step title="Find the function's address">
+    Every function in GTA:SA has a fixed memory address in the Compact exe. You need this address to install your hook.
+
+    Common sources for addresses:
+    - **plugin-sdk** — the most complete reference; browse by class name.
+    - **gtaforums.com** — community-maintained address documentation.
+    - **IDA Pro / Ghidra** — disassemble the exe directly and navigate to the function.
+
+    Once you have the address, note it as a hex literal, for example `0x52CD90`.
+  </Step>
+
+  <Step title="Locate or create the class files">
+    Class implementations live in `source/game_sa/`. Each class has a header (`.h`) and a source file (`.cpp`).
+
+    If the class already exists, open the existing files. If not, create `ClassName.h` and `ClassName.cpp` following the naming pattern of neighboring files.
+
+    Declare the function in the header:
+
+    ```cpp
+    // In Clock.h
+    static void Initialise(uint32 millisecondsPerGameMinute);
+    ```
+  </Step>
+
+  <Step title="Write the C++ implementation">
+    Translate the disassembly into C++. The goal is identical behavior, not identical code structure. Document the address above the function definition:
+
+    ```cpp
+    /*
+     * @brief Initializes the clock.
+     * @param millisecondsPerGameMinute Number of milliseconds per one game minute.
+     * @addr  0x52CD90
+     */
+    void CClock::Initialise(uint32 millisecondsPerGameMinute) {
+        ms_nMillisecondsPerGameMinute = millisecondsPerGameMinute;
+        ms_nGameClockMonth = 1;
+        ms_nGameClockDays = 1;
+        ms_nLastClockTick = CTimer::GetTimeInMS();
+        ms_nGameClockHours = 12;
+        ms_nGameClockMinutes = 0;
+        ms_nGameClockSeconds = 0;
+        bClockHasBeenStored = false;
+        CurrentDay = 4;
+    }
+    ```
+
+    Follow the [coding guidelines](/contributing/guidelines) while writing — correct types, range-based loops, `const` correctness, etc.
+  </Step>
+
+  <Step title="Register the hook in InjectHooks()">
+    Every source file has an `InjectHooks()` function at the top. This is where you register each reversed function with the hook system.
+
+    Use three macros at the top of `InjectHooks()` to set the scope, then one `RH_ScopedInstall` call per function:
+
+    ```cpp
+    void CClock::InjectHooks() {
+        RH_ScopedClass(CClock);
+        RH_ScopedCategoryGlobal();
+
+        RH_ScopedInstall(Initialise, 0x52CD90);
+        RH_ScopedInstall(Update, 0x52CF10);
+        RH_ScopedInstall(GetGameClockMinutesUntil, 0x52CEB0);
+        RH_ScopedInstall(GetIsTimeInRange, 0x52CEE0);
+        RH_ScopedInstall(NormaliseGameClock, 0x52CDE0);
+        RH_ScopedInstall(OffsetClockByADay, 0x52D0B0);
+        RH_ScopedInstall(SetGameClock, 0x52D150);
+        RH_ScopedInstall(StoreClock, 0x52D020);
+        RH_ScopedInstall(RestoreClock, 0x52D070);
+    }
+    ```
+
+    For functions that are **not yet fully reversed** (stubs), pass `{ .reversed = false }`:
+
+    ```cpp
+    RH_ScopedInstall(FireInstantHit, 0x73FB10, { .reversed = false });
+    ```
+
+    This keeps the hook registered in the debug menu but leaves the original game code running by default.
+  </Step>
+
+  <Step title="Build and test in-game">
+    Build the DLL and launch GTA:SA with it loaded. Press **F7** to open the debug menu.
+
+    The debug menu lets you:
+    - Toggle individual hooks on and off.
+    - Access missions and game states quickly.
+    - Use tool inputs to test specific code paths.
+
+    Test any mission or area that your function affects. If you are unsure what to test, say so in the PR description.
+  </Step>
+</Steps>
+
+## Hook install options
+
+The third argument to `RH_ScopedInstall` is an optional `HookInstallOptions` struct:
+
+| Field | Default | Description |
+|---|---|---|
+| `reversed` | `true` | Whether this function has been fully reversed. |
+| `enabled` | same as `reversed` | Whether the hook is active by default. |
+| `locked` | `!reversed` | Whether the hook can be toggled from the debug menu. |
+
+```cpp
+// Fully reversed — hook is on, visible in menu
+RH_ScopedInstall(Initialise, 0x52CD90);
+
+// Stub — hook is off by default, locked in menu
+RH_ScopedInstall(FireInstantHit, 0x73FB10, { .reversed = false });
+```
+
+## Global and overloaded functions
+
+For free (non-member) functions, use `RH_ScopedGlobalInstall`:
+
+```cpp
+RH_ScopedGlobalInstall(DoTankDoomAiming, 0x73D1E0, { .reversed = false });
+```
+
+For overloaded functions that share a name, use `RH_ScopedOverloadedInstall` with a disambiguating suffix and an explicit cast:
+
+```cpp
+// Static overload
+RH_ScopedOverloadedInstall(CanBeUsedFor2Player, "Static", 0x73B240, bool(*)(eWeaponType));
+
+// Method overload
+RH_ScopedOverloadedInstall(CanBeUsedFor2Player, "Method", 0x73DEF0, bool(CWeapon::*)());
+```
+
+## Macro reference
+
+| Macro | Purpose |
+|---|---|
+| `RH_ScopedClass(cls)` | Sets the current class context. Use at the top of every `InjectHooks()`. |
+| `RH_ScopedCategory(name)` | Sets the debug menu category (mirrors the directory layout). |
+| `RH_ScopedCategoryGlobal()` | Category shorthand for files directly in `source/game_sa/`. |
+| `RH_ScopedInstall(fn, addr, ...)` | Registers a member function hook. |
+| `RH_ScopedGlobalInstall(fn, addr, ...)` | Registers a free function hook. |
+| `RH_ScopedOverloadedInstall(fn, suffix, addr, cast, ...)` | Registers one overload of a function. |
+| `RH_ScopedVMTInstall(fn, addr, ...)` | Registers a virtual function hook (requires `RH_ScopedVirtualClass`). |
+
+<Note>
+  Nested categories are supported with `/` as a separator. Files in subdirectories of `source/game_sa/` (such as `Entity/`) should use `RH_ScopedCategory("Entity")`.
+</Note>

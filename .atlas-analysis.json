@@ -1,0 +1,76 @@
+{
+  "projectType": "general",
+  "projectName": "GTA:SA Reversed",
+  "projectDescription": "A community-driven C++ reimplementation of Grand Theft Auto: San Andreas (1.0 US) that replaces original game functions with reversed and documented equivalents via an injected DLL.",
+  "theme": "aspen",
+  "primaryColor": "#5c64f4",
+  "lightColor": "#acb4fc",
+  "darkColor": "#ffffff",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "building",
+              "game-setup"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/hook-system",
+              "architecture/entities",
+              "architecture/vehicles",
+              "architecture/scripts"
+            ]
+          },
+          {
+            "group": "Systems",
+            "pages": [
+              "systems/audio",
+              "systems/animation",
+              "systems/tasks",
+              "systems/bug-fixes"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/guidelines",
+              "contributing/how-to-reverse",
+              "contributing/debugging",
+              "contributing/progress"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Function-level reimplementation of GTA:SA injected as a DLL via ASI Loader",
+    "Reversible hook system allowing toggling between original and reversed function implementations",
+    "Reversible bug fix framework with named, creditable fixes that can be enabled/disabled",
+    "Modern C++23 codebase with ~7965 reversed functions across 700 classes (~79% complete)",
+    "In-game debug tools menu (ImGui-based) for testing and debugging reversed functions",
+    "SDL3 + OpenAL audio backend with full GTA:SA audio engine reimplementation",
+    "MTA:SA (Multi Theft Auto) compatibility and plugin-sdk integration",
+    "Complete entity hierarchy: Ped, Vehicle (Automobile, Bike, Boat, Heli, Plane, Train), Building, Object"
+  ],
+  "publicApiSurface": [
+    "ReversibleHooks::Install — installs a function hook redirecting GTA calls to reversed implementation",
+    "ReversibleHooks::InstallVirtual — installs a virtual function table hook",
+    "ReversibleHooks::SetCategoryOrItemStateByPath — enable/disable hooks by category path",
+    "notsa::bugfixes::* — named reversible bug fix definitions (GenericCrashing, GenericOOB, etc.)",
+    "notsa::IsFixBugs() — runtime check whether bug fixes are enabled",
+    "RH_ScopedClass / RH_ScopedInstall macros — DSL for registering hooks in InjectHooks()",
+    "CPed, CPlayerPed, CVehicle, CAutomobile, CBike, CBoat, CHeli, CPlane — core entity classes",
+    "CWorld, CStreaming, CPathFind, CRadar, CCamera — major game subsystem managers",
+    "TheScripts / CRunningScript — GTA:SA script (SCM/Opcode) execution engine",
+    "CAudioEngine, CAESound, CAEVehicleAudioEntity — audio subsystem classes"
+  ]
+}

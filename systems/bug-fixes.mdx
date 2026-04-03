@@ -1,0 +1,232 @@
+---
+title: "Reversible bug fixes"
+description: "How gta-reversed tracks, enables, and applies fixes for original GTA:SA bugs — the ReversibleBugFix system and the full list of known fixes."
+---
+
+## Overview
+
+gta-reversed can faithfully reproduce the original GTA:SA behaviour **or** apply targeted bug fixes, depending on how it is compiled and whether the fix is individually enabled at runtime. This is controlled through the `ReversibleBugFix` system defined in `source/reversiblebugfixes/`.
+
+The design goal is to make every fix **optional and auditable**: a developer can disable any fix to reproduce the original bug, and every fix has a credited author and a description.
+
+## The `ReversibleBugFix` struct
+
+```cpp
+// source/reversiblebugfixes/ReversibleBugFix.hpp
+namespace notsa::bugfixes {
+
+struct ReversibleBugFix {
+    const char*       Name{};             // Short display name
+    const char*       Description{};      // What the original bug was
+    const char*       Credit{};           // Who wrote the fix
+    bool              Enabled{ true };    // Is this fix currently active?
+    bool              Locked{ false };    // Can Enabled be toggled at runtime?
+    bool              RequiresRestart{ false }; // Needs game restart to take effect?
+    ReversibleBugFix* Prev{ std::exchange(Tail, this) }; // Intrusive linked list
+};
+
+} // namespace notsa::bugfixes
+```
+
+Every `ReversibleBugFix` instance automatically registers itself in a singly-linked list (tail pointer `ReversibleBugFix::Tail`) at static initialisation time. This list is iterated by the in-game debug tool to display all known fixes and their enabled/disabled state.
+
+## Naming convention
+
+Bug fix instances follow the naming pattern:
+
+```
+ClassName_Function_BugName
+```
+
+Where `BugName` is a short descriptive identifier. Generic categories have their own prefixes:
+
+| Prefix | Used for |
+|---|---|
+| `GenericCrash` | Null pointer access and similar crashes |
+| `GenericUB` | Undefined behaviour (use-after-free, etc.) |
+| `GenericOOB` | Out-of-bounds memory access |
+| `GenericFrameRate` | Frame-rate-dependent logic |
+
+## The `FIX_BUGS` preprocessor define
+
+All fixes are guarded by the `FIX_BUGS` preprocessor symbol. The `notsa::IsFixBugs()` helper returns `true` when it is defined:
+
+```cpp
+// source/extensions/utility.hpp
+constexpr auto IsFixBugs() {
+#ifdef FIX_BUGS
+    return true;
+#else
+    return false;
+#endif
+}
+```
+
+Because `IsFixBugs()` is `constexpr`, the compiler can eliminate dead branches entirely in release builds. When `FIX_BUGS` is not defined, the binary behaves identically to original GTA:SA.
+
+<Note>
+  `FIX_BUGS` is defined in `source/CMakeLists.txt` as a project-wide compile definition. All official builds have bug fixes enabled by default.
+</Note>
+
+## Applying a bug fix
+
+There are two patterns for applying a fix in code:
+
+### Pattern 1 — runtime check (preferred)
+
+Use this when the fixed and unfixed code paths share the same function and both need to be compiled:
+
+```cpp
+void CAESound::UpdatePlayTime(int16 soundLength, int16 loopStartTime, int16 playProgress) {
+    // Guard against division by zero (original game crashes here)
+    if (notsa::IsFixBugs() && soundLength == 0) {
+        return;
+    }
+    m_PlayTime = /* ... / soundLength ... */;
+}
+```
+
+```cpp
+// Vehicle audio: account for event base volume
+float volume = eventVolume;
+if (notsa::IsFixBugs()) {
+    volume += eventBaseVolume; // Original code omitted this
+}
+AESoundManager.PlaySound({ .Volume = volume, /* ... */ });
+```
+
+### Pattern 2 — compile-time branch
+
+Use `if constexpr (notsa::IsFixBugs())` when the fix has zero runtime cost and the unfixed branch should be optimised away:
+
+```cpp
+if constexpr (notsa::IsFixBugs()) {
+    // Fixed behaviour: do the right thing
+} else {
+    // Original (buggy) behaviour preserved for reference
+}
+```
+
+## Adding a new bug fix
+
+<Steps>
+  <Step title="Define the fix in Bugs.hpp">
+    Open `source/reversiblebugfixes/Bugs.hpp` and add a new `inline const ReversibleBugFix` in `namespace notsa::bugfixes`:
+
+    ```cpp
+    inline const ReversibleBugFix CMyClass_MyFunction_BugDescription{
+        .Name        = "Short human-readable name",
+        .Description = "What the original code did wrong",
+        .Credit      = "YourName"
+    };
+    ```
+  </Step>
+  <Step title="Guard the fix in source">
+    In the relevant `.cpp` file, wrap the corrected code with `notsa::IsFixBugs()`:
+
+    ```cpp
+    #include "reversiblebugfixes/Bugs.hpp"
+
+    void CMyClass::MyFunction() {
+        if (notsa::IsFixBugs()) {
+            // Fixed path
+        } else {
+            // Original (buggy) path — kept for reference / toggling
+        }
+    }
+    ```
+  </Step>
+  <Step title="Test both paths">
+    Build with `FIX_BUGS` defined (fixes enabled) and without it (vanilla behaviour) to confirm both code paths compile and behave as expected.
+  </Step>
+</Steps>
+
+## Currently defined bug fixes
+
+<AccordionGroup>
+  <Accordion title="Generic — crashes (null ptr access, etc.)">
+    **Variable:** `GenericCrashing`
+
+    **Credit:** Contributors
+
+    Covers all fixes that prevent null pointer dereferences and similar anomalies that crash the game outright. Applied throughout the codebase wherever an unguarded pointer was accessed in the original.
+  </Accordion>
+  <Accordion title="Generic — undefined behaviour (use-after-free, etc.)">
+    **Variable:** `GenericUB`
+
+    **Credit:** Contributors
+
+    Fixes undefined behaviour including use-after-free of deleted objects. For example, `CCarCtrl::RemoveDistantCars` would continue accessing a vehicle pointer after `PossiblyRemoveVehicle` may have deleted it — the fix re-checks validity after the call.
+  </Accordion>
+  <Accordion title="Generic — out-of-bounds bugs">
+    **Variable:** `GenericOOB`
+
+    **Credit:** Contributors
+
+    Fixes array/buffer accesses that exceed their bounds. Used wherever the original code read or wrote outside an array.
+  </Accordion>
+  <Accordion title="Generic — framerate-related bugs">
+    **Variable:** `GenericFrameRate`
+
+    **Credit:** Contributors
+
+    Fixes logic that was inadvertently framerate-dependent. Without this fix, some calculations give different results at 30 FPS vs 60 FPS.
+  </Accordion>
+  <Accordion title="PS2 Corona Rendering">
+    **Variable:** `PS2CoronaRendering`
+
+    **Credit:** SilentPatch Contributors
+
+    Restores corona rendering to match the PS2 version of the game. The PC original had subtle visual differences in how lens coronas were composited.
+  </Accordion>
+  <Accordion title="AnimBlendSequence_SetName_SetBoneTagFlag">
+    **Variable:** `AnimBlendSequence_SetName_SetBoneTagFlag`
+
+    **Credit:** Pirulax
+
+    `CAnimBlendSequence::SetName` did not correctly set the BoneTag flag when naming a sequence. This caused bone-tagged sequences to be treated as ordinary name-keyed sequences, breaking certain IK and partial animation lookups.
+  </Accordion>
+  <Accordion title="AESound_UpdatePlayTime_DivisionByZero">
+    **Variable:** `AESound_UpdatePlayTime_DivisionByZero`
+
+    **Credit:** Pirulax
+
+    `CAESound::UpdatePlayTime` divided by the sound length to compute playback progress without checking for zero. When a sound had not yet received its length from the hardware layer, this caused a division-by-zero crash.
+  </Accordion>
+  <Accordion title="CCarCtrl_RemoveDistantCars_UseAfterFree">
+    **Variable:** `CCarCtrl_RemoveDistantCars_UseAfterFree`
+
+    **Credit:** Pirulax
+
+    `CCarCtrl::RemoveDistantCars` iterated a list of vehicles and called `PossiblyRemoveVehicle`. That function can delete the vehicle and invalidate the pointer, but the original code continued to dereference it on the next loop iteration, causing a use-after-free.
+  </Accordion>
+  <Accordion title="CAEVehicleAudioEntity_PlayBicycleSound_VolumeFix">
+    **Variable:** `CAEVehicleAudioEntity_PlayBicycleSound_VolumeFix`
+
+    **Credit:** Pirulax
+
+    The bicycle sound emitter computed its final volume without adding the audio event's base volume. All other vehicle sound emitters included the base volume in their calculation. The fix aligns bicycle sounds with the rest of the vehicle audio.
+  </Accordion>
+  <Accordion title="CAEVehicleAudioEntity_PlayAircraftSound_VolumeFix">
+    **Variable:** `CAEVehicleAudioEntity_PlayAircraftSound_VolumeFix`
+
+    **Credit:** Pirulax
+
+    The same event base volume omission affected aircraft engine sounds, causing them to play at incorrect levels relative to the audio data tables. Fixed identically to the bicycle sound fix.
+  </Accordion>
+  <Accordion title="CPathFind_SwitchRoadsOffInArea_StrayAreas">
+    **Variable:** `CPathFind_SwitchRoadsOffInArea_StrayAreas`
+
+    **Credit:** Contributors
+
+    `CPathFind::SwitchRoadsOffInArea` left unused path areas marked as active after missions ended, leading to node graph corruption across save/load cycles. The fix correctly clears stray area flags.
+  </Accordion>
+</AccordionGroup>
+
+## Runtime toggling
+
+Each `ReversibleBugFix` instance has an `Enabled` field that can be toggled at runtime through the in-game debug menu. When `Locked` is `true` the toggle is hidden. When `RequiresRestart` is `true` a notification informs the user that the change takes effect on the next launch.
+
+<Warning>
+  The `Enabled` field only has an effect when code uses `notsa::bugfixes::SomeFix` as a boolean condition directly. It does **not** retroactively override the compile-time `FIX_BUGS` define. If `FIX_BUGS` is not defined at compile time, no fixes are active regardless of `Enabled`.
+</Warning>
